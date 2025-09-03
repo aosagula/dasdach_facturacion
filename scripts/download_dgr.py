@@ -3,20 +3,18 @@ import json
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.credentials import Credentials
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 import io
 from datetime import datetime
 from dotenv import load_dotenv
-
 # Cargar variables de entorno
 load_dotenv()
-
 # Configuración desde .env
 FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '1_jqN8hfdHGbGW4uQYOjIqK6jVnZBJWDa')
 DOWNLOAD_DIRECTORY = os.getenv('DOWNLOAD_DIRECTORY', './downloads')
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-
 class GoogleDriveDownloader:
     def __init__(self, credentials_file='./credentials/credentials.json', token_file='token.json'):
         self.credentials_file = credentials_file
@@ -27,10 +25,29 @@ class GoogleDriveDownloader:
         """Autentica con Google Drive API"""
         creds = None
         
-        # Verificar si las credenciales están en variables de entorno
+        # Verificar si es Service Account (para Docker/producción)
+        google_service_account = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
+        if google_service_account:
+            print("Usando Service Account para autenticación...")
+            # Usar Service Account desde variable de entorno
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                temp_file.write(google_service_account)
+                temp_service_file = temp_file.name
+            
+            try:
+                creds = ServiceAccountCredentials.from_service_account_file(
+                    temp_service_file, scopes=SCOPES)
+                self.service = build('drive', 'v3', credentials=creds)
+                return
+            finally:
+                # Limpiar archivo temporal
+                os.unlink(temp_service_file)
+        
+        # Verificar si las credenciales OAuth están en variables de entorno
         google_credentials = os.getenv('GOOGLE_CREDENTIALS_JSON')
         if google_credentials:
-            # Usar credenciales desde variable de entorno
+            # Usar credenciales OAuth desde variable de entorno
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
                 temp_file.write(google_credentials)
@@ -49,6 +66,19 @@ class GoogleDriveDownloader:
             else:
                 if not os.path.exists(self.credentials_file):
                     raise FileNotFoundError(f"No se encontró el archivo de credenciales: {self.credentials_file}")
+                
+                # Verificar si estamos en Docker (sin display)
+                if os.getenv('DISPLAY') is None and not os.path.exists('/tmp/.X11-unix'):
+                    raise RuntimeError("""
+                    Error: No se puede abrir navegador en Docker. 
+                    
+                    Opciones:
+                    1. Usar Service Account: Configurar GOOGLE_SERVICE_ACCOUNT_JSON
+                    2. Pre-autenticar: Ejecutar localmente primero para generar token.json
+                    3. Usar OAuth con token pre-generado
+                    
+                    Ver DOCKER_SETUP.md para más detalles.
+                    """)
                 
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.credentials_file, SCOPES)
@@ -157,7 +187,6 @@ class GoogleDriveDownloader:
         else:
             print("No se pudo obtener el archivo más reciente.")
             return None
-
 def main():
     # Crear instancia del descargador
     downloader = GoogleDriveDownloader()
@@ -169,6 +198,5 @@ def main():
         print(f"\n=== RESUMEN ===")
         print(f"Archivo descargado en: {result}")
         print(f"Fecha y hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
 if __name__ == "__main__":
     main()
