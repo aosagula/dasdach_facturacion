@@ -27,6 +27,17 @@ class GoogleDriveDownloader:
         """Autentica con Google Drive API"""
         creds = None
         
+        # Verificar si las credenciales están en variables de entorno
+        google_credentials = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        if google_credentials:
+            # Usar credenciales desde variable de entorno
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                temp_file.write(google_credentials)
+                temp_credentials_file = temp_file.name
+            
+            self.credentials_file = temp_credentials_file
+        
         # El archivo token.json almacena los tokens de acceso y actualización del usuario
         if os.path.exists(self.token_file):
             creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
@@ -36,6 +47,9 @@ class GoogleDriveDownloader:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                if not os.path.exists(self.credentials_file):
+                    raise FileNotFoundError(f"No se encontró el archivo de credenciales: {self.credentials_file}")
+                
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.credentials_file, SCOPES)
                 creds = flow.run_local_server(port=0)
@@ -43,6 +57,10 @@ class GoogleDriveDownloader:
             # Guarda las credenciales para la próxima ejecución
             with open(self.token_file, 'w') as token:
                 token.write(creds.to_json())
+        
+        # Limpiar archivo temporal si se creó
+        if google_credentials and os.path.exists(self.credentials_file):
+            os.unlink(self.credentials_file)
                 
         self.service = build('drive', 'v3', credentials=creds)
         
