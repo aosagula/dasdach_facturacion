@@ -10,6 +10,11 @@ sqlalchemy==2.0.23
 # Playwright para automatización web
 playwright==1.40.0
 
+# Google Drive API
+google-api-python-client==2.110.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+
 # Utilidades adicionales
 requests==2.31.0
 pandas==2.1.3
