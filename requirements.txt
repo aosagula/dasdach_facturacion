@@ -1,0 +1,22 @@
+# Dependencias básicas
+python-dotenv==1.0.0
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# PostgreSQL
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.23
+
+# Playwright para automatización web
+playwright==1.40.0
+
+# Utilidades adicionales
+requests==2.31.0
+pandas==2.1.3
+schedule==1.2.0
+
+# Para manejo de archivos y multimedia
+watchdog==3.0.0
+aiofiles==23.2.1
+pillow==10.1.0
+opencv-python-headless==4.8.1.78
