@@ -9,7 +9,7 @@ from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR
 
 app = FastAPI(title="Railway Python Scripts Runner")
 
-# Servir archivos estáticos
+# Servir archivos estÃ¡ticos
 app.mount("/media/photos", StaticFiles(directory="/app/media/photos"), name="photos")
 app.mount("/media/videos", StaticFiles(directory="/app/media/videos"), name="videos")
 app.mount("/data", StaticFiles(directory="/app/data"), name="data")
@@ -22,7 +22,7 @@ SCRIPTS_DIR = Path("/app/scripts")
 async def health_check():
     return {
         "status": "healthy", 
-        "message": "Railway Python Scripts Runner está funcionando",
+        "message": "Railway Python Scripts Runner estÃ¡ funcionando",
         "directories": {
             "photos": str(PHOTOS_DIR),
             "videos": str(VIDEOS_DIR),
@@ -55,7 +55,7 @@ async def list_videos():
 
 @app.get("/download/{file_type}/{filename}")
 async def download_file(file_type: str, filename: str):
-    """Descargar archivo específico"""
+    """Descargar archivo especÃ­fico"""
     try:
         if file_type == "photo":
             file_path = PHOTOS_DIR / filename
@@ -66,7 +66,7 @@ async def download_file(file_type: str, filename: str):
         else:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Tipo de archivo no válido. Usar: photo, video, data"}
+                content={"error": "Tipo de archivo no vÃ¡lido. Usar: photo, video, data"}
             )
         
         if not file_path.exists():
@@ -108,9 +108,19 @@ async def upload_script(file: UploadFile = File(...), background_tasks: Backgrou
             content={"error": f"Error al subir script: {str(e)}"}
         )
 
-@app.post("/run-script/{script_name}")
-async def run_script_endpoint(script_name: str):
-    """Ejecutar un script específico"""
+# ============= NUEVO: ENDPOINT GET PARA PARÁMETROS SIMPLES =============
+@app.get("/run-script/{script_name}")
+async def run_script_get(
+    script_name: str, 
+    args: str = None, 
+    timeout: int = 300
+):
+    """
+    Ejecutar script con parámetros via GET (más simple)
+    
+    Ejemplo:
+    GET /run-script/mi_script.py?args=param1,param2,param3&timeout=600
+    """
     script_path = SCRIPTS_DIR / script_name
     
     if not script_path.exists():
@@ -120,36 +130,129 @@ async def run_script_endpoint(script_name: str):
         )
     
     try:
-        result = await run_python_script(str(script_path))
-        return {"message": "Script ejecutado", "output": result}
+        # Parsear argumentos separados por comas
+        script_args = []
+        if args:
+            script_args = [arg.strip() for arg in args.split(",")]
+        
+        result = await run_python_script(str(script_path), script_args, timeout=timeout)
+        return {
+            "message": "Script ejecutado", 
+            "script": script_name,
+            "args": script_args,
+            "output": result
+        }
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={"error": f"Error al ejecutar script: {str(e)}"}
         )
 
-async def run_python_script(script_path: str):
-    """Ejecutar script Python con playwright headless"""
+# ============= ACTUALIZADO: ENDPOINT POST CON PARÁMETROS =============
+@app.post("/run-script/{script_name}")
+async def run_script_endpoint(script_name: str, parameters: dict = None):
+    """
+    Ejecutar un script específico con parámetros (MÉTODO ORIGINAL MEJORADO)
+    
+    Body JSON ejemplo:
+    {
+        "args": ["parametro1", "parametro2"],
+        "env_vars": {"MI_VAR": "valor"},
+        "timeout": 300
+    }
+    
+    Si no envías parámetros, funciona como antes (retrocompatibilidad)
+    """
+    script_path = SCRIPTS_DIR / script_name
+    
+    if not script_path.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Script no encontrado"}
+        )
+    
+    try:
+        # Parsear parámetros del body (nuevo)
+        args = []
+        env_vars = {}
+        timeout = 300  # default 5 minutos
+        
+        if parameters:
+            args = parameters.get("args", [])
+            env_vars = parameters.get("env_vars", {})
+            timeout = parameters.get("timeout", 300)
+        
+        # Usar la función actualizada
+        result = await run_python_script(str(script_path), args, env_vars, timeout)
+        
+        # Respuesta mejorada con información de parámetros
+        response = {"message": "Script ejecutado", "output": result}
+        
+        if args:
+            response["args"] = args
+        if env_vars:
+            response["env_vars"] = env_vars
+        if timeout != 300:
+            response["timeout"] = timeout
+            
+        return response
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Error al ejecutar script: {str(e)}"}
+        )
+
+# ============= ACTUALIZADA: FUNCIÓN PARA EJECUTAR SCRIPTS =============
+async def run_python_script(script_path: str, args: list = None, env_vars: dict = None, timeout: int = 300):
+    """
+    Ejecutar script Python con playwright headless (FUNCIÓN ORIGINAL MEJORADA)
+    
+    Args:
+        script_path: ruta del script
+        args: lista de argumentos para el script
+        env_vars: variables de entorno adicionales 
+        timeout: timeout en segundos
+    """
     env = os.environ.copy()
     env['PLAYWRIGHT_BROWSERS_PATH'] = '/ms-playwright'
     
+    # Agregar variables de entorno personalizadas (nuevo)
+    if env_vars:
+        env.update(env_vars)
+    
+    # Construir comando (mejorado)
+    command = ["python", script_path]
+    if args:
+        command.extend([str(arg) for arg in args])  # Convertir todos los args a string
+    
     try:
         result = subprocess.run(
-            ["python", script_path],
+            command,
             capture_output=True,
             text=True,
             env=env,
-            timeout=300  # 5 minutos timeout
+            timeout=timeout
         )
+        
+        # Respuesta mejorada con información del comando
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
-            "returncode": result.returncode
+            "returncode": result.returncode,
+            "command": " ".join(command)  # nuevo: mostrar comando ejecutado
         }
+        
     except subprocess.TimeoutExpired:
-        return {"error": "Script timeout"}
+        return {
+            "error": f"Script timeout ({timeout}s)", 
+            "command": " ".join(command)
+        }
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "error": str(e), 
+            "command": " ".join(command)
+        }
 
 @app.get("/scripts/")
 async def list_scripts():
@@ -165,7 +268,7 @@ async def list_scripts():
 
 @app.get("/storage-info/")
 async def storage_info():
-    """Información sobre el almacenamiento utilizado"""
+    """InformaciÃ³n sobre el almacenamiento utilizado"""
     try:
         def get_directory_size(path):
             total = 0
