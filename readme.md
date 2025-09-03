@@ -5,6 +5,9 @@ playwright install
 
 pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
+
+pip install requests
+
 1. Instalación de dependencias:
 bashpip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 2. Configuración de credenciales:

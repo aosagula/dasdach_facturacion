@@ -1,4 +1,6 @@
 .env
 *.json
-
+credentials
 mocks
+
+downloads

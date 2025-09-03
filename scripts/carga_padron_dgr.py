@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# pip install psycopg2-binary python-dotenv
-import os, sys, psycopg2, time
+# pip install psycopg2-binary python-dotenv requests
+import os, sys, psycopg2, time, requests
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -97,6 +97,29 @@ def mostrar_progreso(actual, total, inicio_tiempo):
     tiempo_estimado = (total - actual) / velocidad if velocidad > 0 else 0
     
     print_with_timestamp(f"Progreso: {actual:,}/{total:,} ({porcentaje:.1f}%) - {velocidad:.0f} reg/seg - ETA: {tiempo_estimado:.0f}s")
+
+def enviar_evento(nombre_archivo, estado, mensaje=None, fecha_hora=None):
+    """Envía evento a la URL de notificaciones"""
+    try:
+        if fecha_hora is None:
+            fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        body = {
+            "nombre_archivo": nombre_archivo,
+            "fecha_hora": fecha_hora,
+            "estado": estado
+        }
+        
+        if mensaje:
+            body["mensaje"] = mensaje
+        
+        webhook_url = os.getenv('WEBHOOK_URL', 'https://primary-production-bixen.up.railway.app/webhook-test/event_info')
+        response = requests.post(webhook_url, json=body, timeout=10)
+        print_with_timestamp(f"Evento enviado: {estado} - Status: {response.status_code}")
+        
+    except Exception as e:
+        print_with_timestamp(f"Error al enviar evento: {e}")
+        # No interrumpir el proceso por fallos de notificación
 
 def main():
     inicio_total = time.time()
@@ -280,11 +303,47 @@ def main():
         inicio_carga = time.time()
         print_with_timestamp("Iniciando carga masiva a padron_rgs_raw...")
         
-        with open(ruta, "r", encoding="utf-8", newline="") as f:
-            cur.copy_expert(
-                "COPY  padron_rgs_raw FROM STDIN WITH (FORMAT csv, DELIMITER ';', HEADER false, NULL '')",
-                f
+        # Enviar evento de inicio
+        enviar_evento(
+            nombre_archivo=os.path.basename(ruta),
+            estado="INICIADO",
+            fecha_hora=fecha_inicio.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        
+        try:
+            with open(ruta, "r", encoding="utf-8", newline="") as f:
+                cur.copy_expert(
+                    "COPY  padron_rgs_raw FROM STDIN WITH (FORMAT csv, DELIMITER ';', HEADER false, NULL '')",
+                    f
+                )
+        except Exception as copy_error:
+            # Error específico en la carga COPY
+            fecha_fin = datetime.now()
+            mensaje_error = f"Error en COPY: {str(copy_error)}"
+            
+            print_with_timestamp(f"ERROR durante la carga masiva: {copy_error}")
+            print_with_timestamp("Posibles causas: formato de archivo incorrecto, encoding no compatible, permisos insuficientes")
+            
+            # Enviar evento de error
+            enviar_evento(
+                nombre_archivo=os.path.basename(ruta),
+                estado="ERROR",
+                mensaje=mensaje_error,
+                fecha_hora=fecha_fin.strftime("%Y-%m-%d %H:%M:%S")
             )
+            
+            # Hacer rollback para limpiar la transacción abortada
+            conn.rollback()
+            
+            # Actualizar log con error específico de COPY
+            cur.execute("""
+                UPDATE padron_log_ejecucion 
+                SET fecha_fin = %s, estado = 'ERROR', mensaje_error = %s
+                WHERE id = %s
+            """, (fecha_fin, mensaje_error, log_id))
+            conn.commit()
+            
+            raise  # Re-lanzar la excepción para que sea capturada por el try principal
         
         fin_carga = time.time()
         tiempo_carga = fin_carga - inicio_carga
@@ -293,7 +352,37 @@ def main():
         # Merge a final
         inicio_merge = time.time()
         print_with_timestamp("Iniciando normalización y actualización de tabla final...")
-        cur.execute(SQL_MERGE)
+        
+        try:
+            cur.execute(SQL_MERGE)
+        except Exception as merge_error:
+            # Error específico en el MERGE
+            fecha_fin = datetime.now()
+            mensaje_error = f"Error en MERGE: {str(merge_error)}"
+            
+            print_with_timestamp(f"ERROR durante la normalización: {merge_error}")
+            print_with_timestamp("Posibles causas: restricciones de integridad, tipos de datos incompatibles, claves duplicadas")
+            
+            # Enviar evento de error
+            enviar_evento(
+                nombre_archivo=os.path.basename(ruta),
+                estado="ERROR",
+                mensaje=mensaje_error,
+                fecha_hora=fecha_fin.strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            # Hacer rollback para limpiar la transacción abortada
+            conn.rollback()
+            
+            # Actualizar log con error específico de MERGE
+            cur.execute("""
+                UPDATE padron_log_ejecucion 
+                SET fecha_fin = %s, estado = 'ERROR', mensaje_error = %s
+                WHERE id = %s
+            """, (fecha_fin, mensaje_error, log_id))
+            conn.commit()
+            
+            raise  # Re-lanzar la excepción para que sea capturada por el try principal
         
         # Obtener el número real de registros procesados
         cur.execute("SELECT COUNT(*) FROM padron_rgs")
@@ -316,6 +405,14 @@ def main():
             print_with_timestamp(f"ERROR: {mensaje_error}")
             print_with_timestamp("Posibles causas: registros con formato inválido, fechas incorrectas, CUITs malformados")
             
+            # Enviar evento de error por diferencia de registros
+            enviar_evento(
+                nombre_archivo=os.path.basename(ruta),
+                estado="ERROR",
+                mensaje=mensaje_error,
+                fecha_hora=fecha_fin.strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
             # Actualizar log con error
             cur.execute("""
                 UPDATE padron_log_ejecucion 
@@ -333,6 +430,14 @@ def main():
         else:
             # Todo OK - registros coinciden
             print_with_timestamp(f"Verificación OK: {registros_procesados:,} registros procesados correctamente")
+            
+            # Enviar evento de completado exitoso
+            enviar_evento(
+                nombre_archivo=os.path.basename(ruta),
+                estado="COMPLETADO",
+                mensaje=f"Procesados {registros_procesados:,} registros en {tiempo_total:.1f}s",
+                fecha_hora=fecha_fin.strftime("%Y-%m-%d %H:%M:%S")
+            )
             
             # Actualizar log con éxito
             cur.execute("""
@@ -354,6 +459,18 @@ def main():
     except Exception as e:
         # Manejar errores generales
         fecha_fin = datetime.now()
+        
+        # Enviar evento de error general
+        try:
+            enviar_evento(
+                nombre_archivo=os.path.basename(ruta) if 'ruta' in locals() else "archivo_desconocido",
+                estado="ERROR",
+                mensaje=f"Error general: {str(e)}",
+                fecha_hora=fecha_fin.strftime("%Y-%m-%d %H:%M:%S")
+            )
+        except:
+            pass  # No interrumpir por fallos de notificación
+        
         if log_id and cur:
             try:
                 cur.execute("""
