@@ -20,3 +20,4 @@ watchdog==3.0.0
 aiofiles==23.2.1
 pillow==10.1.0
 opencv-python-headless==4.8.1.78
+python-multipart
