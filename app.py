@@ -7,7 +7,15 @@ import subprocess
 from pathlib import Path
 from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR
 
-app = FastAPI(title="Railway Python Scripts Runner")
+app = FastAPI(
+    title="Agentic for Business Scripts Runner",
+    description="API para ejecutar scripts Python y gestionar archivos multimedia en Railway",
+    version="1.0.0",
+    contact={
+        "name": "Soporte Técnico",
+        "url": "https://github.com/aosagula/"
+    }
+)
 
 # Servir archivos estÃ¡ticos
 app.mount("/media/photos", StaticFiles(directory="/app/media/photos"), name="photos")
@@ -18,7 +26,29 @@ app.mount("/data", StaticFiles(directory="/app/data"), name="data")
 UPLOAD_DIR = Path("/app/uploads")
 SCRIPTS_DIR = Path("/app/scripts")
 
-@app.get("/")
+@app.get("/",
+    summary="Estado del servidor",
+    description="Verifica que el servidor esté funcionando correctamente y muestra la configuración de directorios",
+    response_description="Estado del servidor y configuración de directorios",
+    responses={
+        200: {
+            "description": "Servidor funcionando correctamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "message": "Railway Python Scripts Runner está funcionando",
+                        "directories": {
+                            "photos": "/app/media/photos",
+                            "videos": "/app/media/videos",
+                            "data": "/app/data",
+                            "scripts": "/app/scripts"
+                        }
+                    }
+                }
+            }
+        }
+    })
 async def health_check():
     return {
         "status": "healthy", 
@@ -31,9 +61,47 @@ async def health_check():
         }
     }
 
-@app.get("/files/")
+@app.get("/files/",
+    summary="Listar archivos por tipo",
+    description="Lista archivos guardados, opcionalmente filtrados por tipo (photo, video, data)",
+    response_description="Lista de archivos con información de conteo",
+    responses={
+        200: {
+            "description": "Lista de archivos obtenida exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "todos_los_archivos": {
+                            "summary": "Obtener todos los archivos",
+                            "description": "GET /files/ - Sin parámetros devuelve todos los archivos",
+                            "value": {
+                                "files": [
+                                    {"name": "imagen1.jpg", "type": "photo", "url": "/media/photos/imagen1.jpg"},
+                                    {"name": "video1.mp4", "type": "video", "url": "/media/videos/video1.mp4"}
+                                ],
+                                "total": 2,
+                                "file_type": "all"
+                            }
+                        },
+                        "solo_fotos": {
+                            "summary": "Filtrar solo fotos",
+                            "description": "GET /files/?file_type=photo - Solo archivos de tipo foto",
+                            "value": {
+                                "files": [
+                                    {"name": "imagen1.jpg", "type": "photo", "url": "/media/photos/imagen1.jpg"},
+                                    {"name": "imagen2.png", "type": "photo", "url": "/media/photos/imagen2.png"}
+                                ],
+                                "total": 2,
+                                "file_type": "photo"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 async def list_files(file_type: str = None):
-    """Listar archivos guardados por tipo"""
+    """Listar archivos guardados por tipo (photo, video, data). Si no se especifica tipo, devuelve todos."""
     files = list_saved_files(file_type)
     return {
         "files": files,
@@ -41,21 +109,104 @@ async def list_files(file_type: str = None):
         "file_type": file_type or "all"
     }
 
-@app.get("/files/photos/")
+@app.get("/files/photos/",
+    summary="Listar todas las fotos",
+    description="Obtiene una lista completa de todas las fotos almacenadas en el servidor",
+    response_description="Lista de fotos disponibles",
+    responses={
+        200: {
+            "description": "Lista de fotos obtenida exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "photos": [
+                            {"name": "paisaje.jpg", "type": "photo", "url": "/media/photos/paisaje.jpg"},
+                            {"name": "retrato.png", "type": "photo", "url": "/media/photos/retrato.png"},
+                            {"name": "screenshot.webp", "type": "photo", "url": "/media/photos/screenshot.webp"}
+                        ],
+                        "total": 3
+                    }
+                }
+            }
+        }
+    })
 async def list_photos():
-    """Listar todas las fotos guardadas"""
+    """Lista todas las fotos guardadas en formato JPG, PNG, WebP, etc."""
     files = list_saved_files("photo")
     return {"photos": files, "total": len(files)}
 
-@app.get("/files/videos/")
+@app.get("/files/videos/",
+    summary="Listar todos los videos",
+    description="Obtiene una lista completa de todos los videos almacenados en el servidor",
+    response_description="Lista de videos disponibles",
+    responses={
+        200: {
+            "description": "Lista de videos obtenida exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "videos": [
+                            {"name": "presentacion.mp4", "type": "video", "url": "/media/videos/presentacion.mp4"},
+                            {"name": "demo.webm", "type": "video", "url": "/media/videos/demo.webm"},
+                            {"name": "tutorial.mov", "type": "video", "url": "/media/videos/tutorial.mov"}
+                        ],
+                        "total": 3
+                    }
+                }
+            }
+        }
+    })
 async def list_videos():
-    """Listar todos los videos guardados"""
+    """Lista todos los videos guardados en formato MP4, WebM, MOV, etc."""
     files = list_saved_files("video")
     return {"videos": files, "total": len(files)}
 
-@app.get("/download/{file_type}/{filename}")
+@app.get("/download/{file_type}/{filename}",
+    summary="Descargar archivo",
+    description="Descarga un archivo específico por tipo y nombre de archivo",
+    response_description="Archivo descargado o mensaje de error",
+    responses={
+        200: {
+            "description": "Archivo descargado exitosamente",
+            "content": {
+                "application/octet-stream": {
+                    "example": "[Contenido binario del archivo]"
+                }
+            }
+        },
+        400: {
+            "description": "Tipo de archivo inválido",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Tipo de archivo no válido. Usar: photo, video, data"
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Archivo no encontrado",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Archivo no encontrado"
+                    }
+                }
+            }
+        }
+    })
 async def download_file(file_type: str, filename: str):
-    """Descargar archivo especÃ­fico"""
+    """
+    Descarga un archivo por tipo y nombre.
+    
+    - **file_type**: Tipo de archivo (photo, video, data)
+    - **filename**: Nombre del archivo a descargar
+    
+    Ejemplos de uso:
+    - GET /download/photo/imagen.jpg
+    - GET /download/video/video.mp4
+    - GET /download/data/archivo.json
+    """
     try:
         if file_type == "photo":
             file_path = PHOTOS_DIR / filename
@@ -87,9 +238,41 @@ async def download_file(file_type: str, filename: str):
             content={"error": f"Error descargando archivo: {str(e)}"}
         )
 
-@app.post("/upload-script/")
+@app.post("/upload-script/",
+    summary="Subir script Python",
+    description="Sube un archivo .py al servidor y opcionalmente lo ejecuta en segundo plano",
+    response_description="Confirmación de subida del script",
+    responses={
+        200: {
+            "description": "Script subido exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Script mi_script.py subido exitosamente"
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Error al subir el script",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Error al subir script: [detalle del error]"
+                    }
+                }
+            }
+        }
+    })
 async def upload_script(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
-    """Subir y ejecutar scripts Python"""
+    """
+    Sube un script Python (.py) al servidor.
+    
+    - **file**: Archivo .py a subir
+    - **background_tasks**: Si está presente, ejecuta el script en segundo plano automáticamente
+    
+    El archivo se guarda en /app/scripts/ y puede ejecutarse posteriormente con los endpoints de ejecución.
+    """
     try:
         # Guardar archivo
         file_path = SCRIPTS_DIR / file.filename
@@ -109,17 +292,77 @@ async def upload_script(file: UploadFile = File(...), background_tasks: Backgrou
         )
 
 # ============= NUEVO: ENDPOINT GET PARA PARÁMETROS SIMPLES =============
-@app.get("/run-script/{script_name}")
+@app.get("/run-script/{script_name}",
+    summary="Ejecutar script vía GET (simple)",
+    description="Ejecuta un script con parámetros simples vía URL. Método simplificado para ejecuciones rápidas",
+    response_description="Resultado de la ejecución del script",
+    responses={
+        200: {
+            "description": "Script ejecutado exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "sin_argumentos": {
+                            "summary": "Ejecución sin argumentos",
+                            "description": "GET /run-script/script.py",
+                            "value": {
+                                "message": "Script ejecutado",
+                                "script": "script.py",
+                                "args": [],
+                                "output": {
+                                    "stdout": "Resultado del script",
+                                    "stderr": "",
+                                    "returncode": 0,
+                                    "command": "python /app/scripts/script.py"
+                                }
+                            }
+                        },
+                        "con_argumentos": {
+                            "summary": "Ejecución con argumentos",
+                            "description": "GET /run-script/process_data.py?args=archivo1.csv,output.json&timeout=600",
+                            "value": {
+                                "message": "Script ejecutado",
+                                "script": "process_data.py",
+                                "args": ["archivo1.csv", "output.json"],
+                                "output": {
+                                    "stdout": "Procesando archivo1.csv...\nGuardado en output.json",
+                                    "stderr": "",
+                                    "returncode": 0,
+                                    "command": "python /app/scripts/process_data.py archivo1.csv output.json"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Script no encontrado",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Script no encontrado"
+                    }
+                }
+            }
+        }
+    })
 async def run_script_get(
     script_name: str, 
     args: str = None, 
     timeout: int = 300
 ):
     """
-    Ejecutar script con parámetros via GET (más simple)
+    Ejecuta un script Python vía GET con parámetros simples.
     
-    Ejemplo:
-    GET /run-script/mi_script.py?args=param1,param2,param3&timeout=600
+    - **script_name**: Nombre del script a ejecutar (debe existir en /app/scripts/)
+    - **args**: Argumentos separados por comas (opcional). Ejemplo: "param1,param2,param3"
+    - **timeout**: Timeout en segundos (por defecto 300 = 5 minutos)
+    
+    Ejemplos de uso:
+    - GET /run-script/mi_script.py
+    - GET /run-script/process.py?args=input.txt,output.txt
+    - GET /run-script/long_task.py?timeout=1800&args=config.json
     """
     script_path = SCRIPTS_DIR / script_name
     
@@ -149,19 +392,83 @@ async def run_script_get(
         )
 
 # ============= ACTUALIZADO: ENDPOINT POST CON PARÁMETROS =============
-@app.post("/run-script/{script_name}")
+@app.post("/run-script/{script_name}",
+    summary="Ejecutar script vía POST (avanzado)",
+    description="Ejecuta un script con parámetros avanzados vía JSON. Soporta argumentos, variables de entorno y timeout personalizado",
+    response_description="Resultado de la ejecución con detalles completos",
+    responses={
+        200: {
+            "description": "Script ejecutado exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "simple": {
+                            "summary": "Ejecución simple",
+                            "description": "POST sin parámetros adicionales",
+                            "value": {
+                                "message": "Script ejecutado",
+                                "output": {
+                                    "stdout": "Hello World",
+                                    "stderr": "",
+                                    "returncode": 0,
+                                    "command": "python /app/scripts/hello.py"
+                                }
+                            }
+                        },
+                        "con_parametros": {
+                            "summary": "Ejecución con parámetros",
+                            "description": "POST con args, env_vars y timeout",
+                            "value": {
+                                "message": "Script ejecutado",
+                                "args": ["input.csv", "processed"],
+                                "env_vars": {"API_KEY": "secret123"},
+                                "timeout": 600,
+                                "output": {
+                                    "stdout": "Archivo procesado exitosamente",
+                                    "stderr": "",
+                                    "returncode": 0,
+                                    "command": "python /app/scripts/process.py input.csv processed"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Script no encontrado",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Script no encontrado"
+                    }
+                }
+            }
+        }
+    })
 async def run_script_endpoint(script_name: str, parameters: dict = None):
     """
-    Ejecutar un script específico con parámetros (MÉTODO ORIGINAL MEJORADO)
+    Ejecuta un script con parámetros avanzados vía POST.
     
-    Body JSON ejemplo:
+    - **script_name**: Nombre del script a ejecutar
+    - **parameters** (opcional): JSON con:
+      - **args**: Lista de argumentos para el script
+      - **env_vars**: Diccionario de variables de entorno
+      - **timeout**: Timeout en segundos (por defecto 300)
+    
+    Ejemplo de body JSON:
+    ```json
     {
-        "args": ["parametro1", "parametro2"],
-        "env_vars": {"MI_VAR": "valor"},
-        "timeout": 300
+        "args": ["archivo_entrada.txt", "archivo_salida.json"],
+        "env_vars": {
+            "API_KEY": "mi_clave_secreta",
+            "DEBUG": "true"
+        },
+        "timeout": 600
     }
+    ```
     
-    Si no envías parámetros, funciona como antes (retrocompatibilidad)
+    Si no se envían parámetros, el script se ejecuta sin argumentos adicionales.
     """
     script_path = SCRIPTS_DIR / script_name
     
@@ -206,13 +513,16 @@ async def run_script_endpoint(script_name: str, parameters: dict = None):
 # ============= ACTUALIZADA: FUNCIÓN PARA EJECUTAR SCRIPTS =============
 async def run_python_script(script_path: str, args: list = None, env_vars: dict = None, timeout: int = 300):
     """
-    Ejecutar script Python con playwright headless (FUNCIÓN ORIGINAL MEJORADA)
+    Ejecuta un script Python con soporte completo para argumentos y variables de entorno.
     
     Args:
-        script_path: ruta del script
-        args: lista de argumentos para el script
-        env_vars: variables de entorno adicionales 
-        timeout: timeout en segundos
+        script_path: Ruta completa al script Python
+        args: Lista de argumentos para pasar al script
+        env_vars: Diccionario de variables de entorno adicionales
+        timeout: Timeout máximo de ejecución en segundos
+    
+    Returns:
+        dict: Resultado con stdout, stderr, returncode y comando ejecutado
     """
     env = os.environ.copy()
     env['PLAYWRIGHT_BROWSERS_PATH'] = '/ms-playwright'
@@ -266,9 +576,63 @@ async def list_scripts():
             content={"error": str(e)}
         )
 
-@app.get("/storage-info/")
+@app.get("/storage-info/",
+    summary="Información de almacenamiento",
+    description="Obtiene estadísticas detalladas sobre el uso de almacenamiento por tipo de archivo",
+    response_description="Estadísticas de uso de almacenamiento",
+    responses={
+        200: {
+            "description": "Información de almacenamiento obtenida exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "photos": {
+                            "size_bytes": 15728640,
+                            "size_mb": 15.0,
+                            "count": 8
+                        },
+                        "videos": {
+                            "size_bytes": 104857600,
+                            "size_mb": 100.0,
+                            "count": 3
+                        },
+                        "data": {
+                            "size_bytes": 2097152,
+                            "size_mb": 2.0,
+                            "count": 12
+                        },
+                        "total": {
+                            "size_bytes": 122683392,
+                            "size_mb": 117.0,
+                            "count": 23
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Error al calcular el almacenamiento",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "No se pudo acceder a los directorios de almacenamiento"
+                    }
+                }
+            }
+        }
+    })
 async def storage_info():
-    """InformaciÃ³n sobre el almacenamiento utilizado"""
+    """
+    Proporciona información detallada sobre el uso del almacenamiento.
+    
+    Calcula el tamaño total y número de archivos para:
+    - Fotos (imágenes)
+    - Videos
+    - Datos (archivos de datos generados por scripts)
+    - Total general
+    
+    Los tamaños se muestran tanto en bytes como en megabytes para facilitar la lectura.
+    """
     try:
         def get_directory_size(path):
             total = 0
