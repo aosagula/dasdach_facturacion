@@ -3,6 +3,9 @@ from dotenv import load_dotenv
 from playwright.sync_api import Playwright, sync_playwright
 import time
 import re
+import sys
+sys.path.append('/app')
+from file_manager import save_photo
 
 def run_finnegans_login(playwright: Playwright) -> tuple:
     load_dotenv()
@@ -16,7 +19,7 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
         print("Error: USER_FINNEGANS and PASSWORD_FINNEGANS must be set in .env file")
         return None, None, None
     
-    browser = playwright.chromium.launch(headless=False)
+    browser = playwright.chromium.launch(headless=True)
     context = browser.new_context()
     page = context.new_page()
     
@@ -47,7 +50,8 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
         print("Submitting login form...")
         submit_button = page.locator('input[name="standardSubmit"]')
         print("Taking screenshot for debugging...")
-        page.screenshot(path="login_page.png")
+        screenshot_bytes = page.screenshot()
+        save_photo(screenshot_bytes, "finnegans_login_page.png", "finnegans_login")
         
         submit_button.click()
         
@@ -60,7 +64,8 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
             print(f"Login successful! Redirected to: {current_url}")
             
             # Tomar screenshot de la página después del login
-            page.screenshot(path="post_login_page.png")
+            screenshot_bytes = page.screenshot()
+            save_photo(screenshot_bytes, "finnegans_post_login_page.png", "finnegans_login")
             
             # Esperar a que la página se cargue completamente
             page.wait_for_load_state('networkidle', timeout=10000)
@@ -70,7 +75,8 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
             print(f"Login redirect timeout. Current URL: {current_url}")
             if 'login' in current_url.lower():
                 print("Login may have failed - still on login page")
-                page.screenshot(path="login_failed_page.png")
+                screenshot_bytes = page.screenshot()
+                save_photo(screenshot_bytes, "finnegans_login_failed_page.png", "finnegans_login")
                 return None, None, None
             
         time.sleep(2)
@@ -94,7 +100,8 @@ def run_finnegans_facturacion(browser, context, page) -> None:
     print(f"Current URL: {current_url}")
     
     # Tomar screenshot del estado actual
-    page.screenshot(path="facturacion_start.png")
+    screenshot_bytes = page.screenshot()
+    save_photo(screenshot_bytes, "finnegans_facturacion_start.png", "finnegans_login")
     
     # Buscar elementos de navegación o menús
     try:
@@ -120,11 +127,13 @@ def run_finnegans_facturacion(browser, context, page) -> None:
         time.sleep(2)
         #page.wait_for_load_state('networkidle', timeout=10000)
         print("Navigated to Facturas section")
-        page.screenshot(path="facturacion_loaded.png")
+        screenshot_bytes = page.screenshot()
+        save_photo(screenshot_bytes, "finnegans_facturacion_loaded.png", "finnegans_login")
         
         time.sleep(2)
         print("Nueva Factura button is visible")
-        page.screenshot(path="facturacion_nueva_factura.png")
+        screenshot_bytes = page.screenshot()
+        save_photo(screenshot_bytes, "finnegans_facturacion_nueva_factura_1.png", "finnegans_login")
         
         frame = page.frames[1] # Ajusta el índice según sea necesario
         
@@ -135,13 +144,15 @@ def run_finnegans_facturacion(browser, context, page) -> None:
         elemento.click()
         time.sleep(2)
         print("Nueva Factura button is visible")
-        page.screenshot(path="facturacion_nueva_factura.png")
+        screenshot_bytes = page.screenshot()
+        save_photo(screenshot_bytes, "finnegans_facturacion_nueva_factura_2.png", "finnegans_login")
         
         asistente = frame.locator("input[type=radio][name='WizardWorkflowSelect'][value='160']")
         asistente.click()
         time.sleep(2)
         print("Nueva Factura button is visible")
-        page.screenshot(path="facturacion_nueva_factura.png")
+        screenshot_bytes = page.screenshot()
+        save_photo(screenshot_bytes, "finnegans_facturacion_nueva_factura_3.png", "finnegans_login")
         
         frame.locator('#OPERACIONSIGUIENTEPASO1_0').click()
         time.sleep(2)
@@ -188,7 +199,8 @@ def run_finnegans_reports(browser, context, page) -> None:
     current_url = page.url
     print(f"Current URL: {current_url}")
     
-    page.screenshot(path="reports_start.png")
+    screenshot_bytes = page.screenshot()
+    save_photo(screenshot_bytes, "finnegans_reports_start.png", "finnegans_login")
     print("Ready for reports operations...")
 
 def navigate_to_section(page, section_name: str) -> bool:
@@ -233,7 +245,7 @@ def main():
             # Opcional: ejecutar otros módulos
             # run_finnegans_reports(browser, context, page)
             
-            input("\nPress Enter to close browser...")
+            #input("\nPress Enter to close browser...")
             close_finnegans_session(browser, context)
         else:
             print("Login failed, skipping additional operations")
