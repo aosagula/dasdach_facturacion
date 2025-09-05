@@ -688,7 +688,7 @@ async def get_alicuota_cuit(cuit: str):
         if result:
             return CuitResponse(
                 cuit=result[0],
-                alicuota=float(result[1]) if result[1] else None,
+                alicuota=float(result[1]) if result[1] is not None else None,
                 vigencia_desde=result[2].strftime('%Y-%m-%d') if result[2] else None,
                 vigencia_hasta=result[3].strftime('%Y-%m-%d') if result[3] else None,
                 fecha_emision=result[4].strftime('%Y-%m-%d') if result[4] else None,
@@ -808,7 +808,7 @@ async def get_alicuotas_multiple(request: CuitRequest):
             if result:
                 resultados.append(CuitResponse(
                     cuit=result[0],
-                    alicuota=float(result[1]) if result[1] else None,
+                    alicuota=float(result[1]) if result[1] is not None else None,
                     vigencia_desde=result[2].strftime('%Y-%m-%d') if result[2] else None,
                     vigencia_hasta=result[3].strftime('%Y-%m-%d') if result[3] else None,
                     fecha_emision=result[4].strftime('%Y-%m-%d') if result[4] else None,
