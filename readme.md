@@ -1,4 +1,15 @@
+
+
+https://api.teamplace.finneg.com/api/reports/analisisPedidoVenta
 pendientes codigo = 2
+curl --request GET \
+  --url 'https://api.teamplace.finneg.com/api/reports/analisisPedidoVenta?PARAMWEBREPORT_verPendientes=2&ACCESS_TOKEN={{token}}' \
+  --header 'Accept: application/json'
+
+
+Los parametros de fecha son importantes para que traiga todos los pendientes la API sino trae la ultima semana por defecto.
+
+
 
 pip install playwright
 playwright install
