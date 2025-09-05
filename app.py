@@ -1,11 +1,39 @@
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Query
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List, Optional
 import os
 import shutil
 import subprocess
+import psycopg2
 from pathlib import Path
+from dotenv import load_dotenv
 from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR
+
+# Cargar variables de entorno
+load_dotenv()
+
+# Configuración de base de datos
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': os.getenv('DB_PORT', '5432'),
+    'database': os.getenv('DB_NAME', 'railway'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', '')
+}
+
+# Modelos Pydantic
+class CuitRequest(BaseModel):
+    cuits: List[str]
+
+class CuitResponse(BaseModel):
+    cuit: str
+    alicuota: Optional[float]
+    vigencia_desde: Optional[str]
+    vigencia_hasta: Optional[str]
+    fecha_emision: Optional[str]
+    encontrado: bool
 
 app = FastAPI(
     title="Agentic for Business Scripts Runner",
@@ -575,6 +603,275 @@ async def list_scripts():
             status_code=500,
             content={"error": str(e)}
         )
+
+# ============= ENDPOINTS PARA CONSULTA DE ALÍCUOTAS POR CUIT =============
+
+@app.get("/alicuota/{cuit}",
+    summary="Consultar alícuota por CUIT individual",
+    description="Obtiene la alícuota de un CUIT específico desde el padrón RGS",
+    response_description="Información de alícuota para el CUIT consultado",
+    responses={
+        200: {
+            "description": "Consulta realizada exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "encontrado": {
+                            "summary": "CUIT encontrado",
+                            "value": {
+                                "cuit": "20123456784",
+                                "alicuota": 10.5,
+                                "vigencia_desde": "2025-01-01",
+                                "vigencia_hasta": "2025-12-31",
+                                "fecha_emision": "2025-01-01",
+                                "encontrado": True
+                            }
+                        },
+                        "no_encontrado": {
+                            "summary": "CUIT no encontrado",
+                            "value": {
+                                "cuit": "20999999999",
+                                "alicuota": None,
+                                "vigencia_desde": None,
+                                "vigencia_hasta": None,
+                                "fecha_emision": None,
+                                "encontrado": False
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "CUIT inválido",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "CUIT debe tener 11 dígitos"
+                    }
+                }
+            }
+        }
+    })
+async def get_alicuota_cuit(cuit: str):
+    """
+    Consulta la alícuota de un CUIT específico.
+    
+    - **cuit**: CUIT de 11 dígitos (solo números)
+    
+    Retorna la alícuota vigente más reciente del CUIT consultado.
+    """
+    # Validar formato CUIT
+    cuit_clean = cuit.replace("-", "").replace(" ", "")
+    if not cuit_clean.isdigit() or len(cuit_clean) != 11:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "CUIT debe tener 11 dígitos"}
+        )
+    
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        
+        # Consultar alícuota más reciente para el CUIT
+        cur.execute("""
+            SELECT cuit, alicuota, vigencia_desde, vigencia_hasta, fecha_emision
+            FROM padron_rgs 
+            WHERE cuit = %s 
+            ORDER BY fecha_emision DESC, vigencia_desde DESC
+            LIMIT 1
+        """, (cuit_clean,))
+        
+        result = cur.fetchone()
+        conn.close()
+        
+        if result:
+            return CuitResponse(
+                cuit=result[0],
+                alicuota=float(result[1]) if result[1] else None,
+                vigencia_desde=result[2].strftime('%Y-%m-%d') if result[2] else None,
+                vigencia_hasta=result[3].strftime('%Y-%m-%d') if result[3] else None,
+                fecha_emision=result[4].strftime('%Y-%m-%d') if result[4] else None,
+                encontrado=True
+            )
+        else:
+            return CuitResponse(
+                cuit=cuit_clean,
+                alicuota=None,
+                vigencia_desde=None,
+                vigencia_hasta=None,
+                fecha_emision=None,
+                encontrado=False
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Error consultando base de datos: {str(e)}"}
+        )
+
+@app.post("/alicuotas/",
+    summary="Consultar alícuotas por lista de CUITs",
+    description="Obtiene las alícuotas de múltiples CUITs de una sola vez",
+    response_description="Lista con información de alícuota para cada CUIT consultado",
+    responses={
+        200: {
+            "description": "Consulta realizada exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "resultados": [
+                            {
+                                "cuit": "20123456784",
+                                "alicuota": 10.5,
+                                "vigencia_desde": "2025-01-01",
+                                "vigencia_hasta": "2025-12-31",
+                                "fecha_emision": "2025-01-01",
+                                "encontrado": True
+                            },
+                            {
+                                "cuit": "20999999999",
+                                "alicuota": None,
+                                "vigencia_desde": None,
+                                "vigencia_hasta": None,
+                                "fecha_emision": None,
+                                "encontrado": False
+                            }
+                        ],
+                        "total_consultados": 2,
+                        "encontrados": 1,
+                        "no_encontrados": 1
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Lista de CUITs inválida",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Debe proporcionar al menos un CUIT"
+                    }
+                }
+            }
+        }
+    })
+async def get_alicuotas_multiple(request: CuitRequest):
+    """
+    Consulta las alícuotas de múltiples CUITs.
+    
+    Body JSON:
+    ```json
+    {
+        "cuits": ["20123456784", "27987654321", "30555666777"]
+    }
+    ```
+    
+    Retorna la alícuota vigente más reciente para cada CUIT consultado.
+    """
+    if not request.cuits:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Debe proporcionar al menos un CUIT"}
+        )
+    
+    # Validar y limpiar CUITs
+    cuits_clean = []
+    for cuit in request.cuits:
+        cuit_clean = cuit.replace("-", "").replace(" ", "")
+        if not cuit_clean.isdigit() or len(cuit_clean) != 11:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"CUIT inválido: {cuit} (debe tener 11 dígitos)"}
+            )
+        cuits_clean.append(cuit_clean)
+    
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        
+        resultados = []
+        encontrados = 0
+        
+        for cuit in cuits_clean:
+            # Consultar alícuota más reciente para cada CUIT
+            cur.execute("""
+                SELECT cuit, alicuota, vigencia_desde, vigencia_hasta, fecha_emision
+                FROM padron_rgs 
+                WHERE cuit = %s 
+                ORDER BY fecha_emision DESC, vigencia_desde DESC
+                LIMIT 1
+            """, (cuit,))
+            
+            result = cur.fetchone()
+            
+            if result:
+                resultados.append(CuitResponse(
+                    cuit=result[0],
+                    alicuota=float(result[1]) if result[1] else None,
+                    vigencia_desde=result[2].strftime('%Y-%m-%d') if result[2] else None,
+                    vigencia_hasta=result[3].strftime('%Y-%m-%d') if result[3] else None,
+                    fecha_emision=result[4].strftime('%Y-%m-%d') if result[4] else None,
+                    encontrado=True
+                ))
+                encontrados += 1
+            else:
+                resultados.append(CuitResponse(
+                    cuit=cuit,
+                    alicuota=None,
+                    vigencia_desde=None,
+                    vigencia_hasta=None,
+                    fecha_emision=None,
+                    encontrado=False
+                ))
+        
+        conn.close()
+        
+        return {
+            "resultados": resultados,
+            "total_consultados": len(cuits_clean),
+            "encontrados": encontrados,
+            "no_encontrados": len(cuits_clean) - encontrados
+        }
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Error consultando base de datos: {str(e)}"}
+        )
+
+@app.get("/alicuotas/",
+    summary="Consultar alícuotas por CUITs vía GET",
+    description="Obtiene las alícuotas de múltiples CUITs mediante parámetros GET",
+    response_description="Lista con información de alícuota para cada CUIT consultado",
+    responses={
+        200: {
+            "description": "Consulta realizada exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "resultados": [
+                            {
+                                "cuit": "20123456784",
+                                "alicuota": 10.5,
+                                "encontrado": True
+                            }
+                        ],
+                        "total_consultados": 1,
+                        "encontrados": 1
+                    }
+                }
+            }
+        }
+    })
+async def get_alicuotas_get(cuits: List[str] = Query(..., description="Lista de CUITs separados por comas")):
+    """
+    Consulta las alícuotas de múltiples CUITs vía GET.
+    
+    Ejemplo de uso:
+    - GET /alicuotas/?cuits=20123456784&cuits=27987654321&cuits=30555666777
+    """
+    return await get_alicuotas_multiple(CuitRequest(cuits=cuits))
 
 @app.get("/storage-info/",
     summary="Información de almacenamiento",
