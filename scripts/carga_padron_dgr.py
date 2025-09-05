@@ -183,6 +183,26 @@ def main():
             if stmt.strip():
                 cur.execute(stmt + ";")
         
+        # Verificar si el archivo ya fue procesado exitosamente antes
+        nombre_archivo = os.path.basename(ruta)
+        if not forzar_carga:
+            cur.execute("""
+                SELECT COUNT(*) FROM padron_log_ejecucion 
+                WHERE nombre_archivo = %s AND estado = 'COMPLETADO'
+            """, (nombre_archivo,))
+            
+            archivos_procesados = cur.fetchone()[0]
+            
+            if archivos_procesados > 0:
+                print_with_timestamp(f"El archivo '{nombre_archivo}' ya fue procesado exitosamente anteriormente")
+                print_with_timestamp("Use el parámetro 'S' o configure FORZAR_CARGA=S para forzar el reprocesamiento")
+                conn.close()
+                sys.exit(0)  # Salir exitosamente sin error
+            else:
+                print_with_timestamp(f"Verificación OK: El archivo '{nombre_archivo}' no ha sido procesado anteriormente")
+        else:
+            print_with_timestamp(f"FORZAR_CARGA=S: Procesando '{nombre_archivo}' aunque ya haya sido procesado")
+        
         # Inicializar log de ejecución
         cur.execute("""
             INSERT INTO padron_log_ejecucion (fecha_inicio, nombre_archivo, total_registros, estado, forzar_carga)
