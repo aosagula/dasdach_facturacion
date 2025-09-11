@@ -8,7 +8,17 @@ import os
 import requests
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from datetime import datetime
+import threading
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def timestamp() -> str:
+    """Retorna el timestamp actual formateado"""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+def print_with_time(message: str) -> None:
+    """Print con timestamp automático"""
+    print(f"[{timestamp()}] {message}")
 
 def get_token() -> str:
     """Obtiene el token de autenticación desde la variable de entorno"""
@@ -19,7 +29,7 @@ def get_token() -> str:
     url=f"https://api.teamplace.finneg.com/api/oauth/token?grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}"
     
     if not client_id or not client_secret:
-        print("Error: FINNEGANS_CLIENT_ID and FINNEGANS_SECRET must be set in .env file")
+        print_with_time("Error: FINNEGANS_CLIENT_ID and FINNEGANS_SECRET must be set in .env file")
         exit(1)
     
     response = requests.get(url)
@@ -27,7 +37,7 @@ def get_token() -> str:
         data = response.text
         return data
     else:
-        print(f"Error al obtener el token: {response.status_code} - {response.text}")
+        print_with_time(f"Error al obtener el token: {response.status_code} - {response.text}")
         exit(1)
         
         
@@ -94,7 +104,7 @@ def get_remitos_pendientes(company: str) -> list:
     """Obtiene la lista de remitos pendientes desde la variable de entorno"""
     load_dotenv()
     token=get_token()
-    
+    print_with_time(f"Obteniendo remitos pendientes para la empresa: {company}")
     
     url = f"https://api.teamplace.finneg.com/api/reports/analisisDespachoVenta?PARAMWEBREPORT_verPendientes=2&ACCESS_TOKEN={token}"
     
@@ -104,7 +114,7 @@ def get_remitos_pendientes(company: str) -> list:
         remitos_company = [r for r in data if r.get('EMPRESA') == company]
         return remitos_company
     else:
-        print(f"Error al obtener los remitos: {response.status_code} - {response.text}")
+        print_with_time(f"Error al obtener los remitos: {response.status_code} - {response.text}")
     
     
         return []
@@ -124,12 +134,22 @@ def save_screenshot(image_bytes, filename):
         with open(full_path, 'wb') as f:
             f.write(image_bytes)
         
-        print(f"Screenshot guardado en: {full_path}")
+        print_with_time(f"Screenshot guardado en: {full_path}")
         return str(full_path)
     
     except Exception as e:
-        print(f"Error guardando screenshot: {e}")
+        print_with_time(f"Error guardando screenshot: {e}")
         return None
+
+def get_video_path():
+    """Obtener la ruta para guardar videos"""
+    load_dotenv()
+    video_dir = os.getenv('LOG_VIDEO_PATH', './media/videos/')
+    Path(video_dir).mkdir(parents=True, exist_ok=True)
+    
+    timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    video_filename = f"finnegans_session_{timestamp_str}.webm"
+    return Path(video_dir) / video_filename
 
 def run_finnegans_login(playwright: Playwright) -> tuple:
     load_dotenv()
@@ -140,52 +160,66 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
     webpage = os.getenv('WEBPAGE_FINNEGANS', 'https://services.finneg.com/login')
     
     if not username or not password:
-        print("Error: USER_FINNEGANS and PASSWORD_FINNEGANS must be set in .env file")
+        print_with_time("Error: USER_FINNEGANS and PASSWORD_FINNEGANS must be set in .env file")
         return None, None, None
     
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
+    # Configurar grabación de video opcional
+    enable_video = os.getenv('ENABLE_VIDEO_RECORDING', 'false').lower() == 'true'
+    context_options = {}
+    
+    if enable_video:
+        video_path = get_video_path()
+        print_with_time(f"Video recording enabled - se guardará en: {video_path}")
+        context_options = {
+            "record_video_dir": str(video_path.parent),
+            "record_video_size": {"width": 1280, "height": 720}
+        }
+    else:
+        print_with_time("Video recording disabled")
+    
+    browser = playwright.chromium.launch(headless=False)
+    context = browser.new_context(**context_options)
     page = context.new_page()
     
     try:
-        print("Navigating to Finnegans login page...")
+        print_with_time("Navigating to Finnegans login page...")
         page.goto(webpage)
         
-        print("Waiting for page to load...")
+        print_with_time("Waiting for page to load...")
         page.wait_for_load_state('networkidle')
         
        
         
-        print("Looking for login form elements...")
+        print_with_time("Looking for login form elements...")
         page.wait_for_timeout(2000)
         
         username_element = 'input[name="userName"]'
         password_element = 'input[name="password"]'
         company_element = 'input[name="empresa"]'
         
-        print("Filling credentials...")
+        print_with_time("Filling credentials...")
         page.fill(username_element, username)
         page.fill(password_element, password)
         
         if workspace:
-            print(f"Filling company field with: {workspace}")
+            print_with_time(f"Filling company field with: {workspace}")
             page.fill(company_element, workspace)
         
-        print("Submitting login form...")
+        print_with_time("Submitting login form...")
         submit_button = page.locator('input[name="standardSubmit"]')
-        print("Taking screenshot for debugging...")
+        print_with_time("Taking screenshot for debugging...")
         screenshot_bytes = page.screenshot()
         save_screenshot(screenshot_bytes, "finnegans_login_page.png")
         
         submit_button.click()
         
-        print("Waiting for login to complete...")
+        print_with_time("Waiting for login to complete...")
         
         # Esperar a que la URL cambie después del login
         try:
             page.wait_for_url(lambda url: 'login' not in url.lower(), timeout=15000)
             current_url = page.url
-            print(f"Login successful! Redirected to: {current_url}")
+            print_with_time(f"Login successful! Redirected to: {current_url}")
             
             # Tomar screenshot de la página después del login
             screenshot_bytes = page.screenshot()
@@ -196,18 +230,18 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
             
         except Exception as redirect_error:
             current_url = page.url
-            print(f"Login redirect timeout. Current URL: {current_url}")
+            print_with_time(f"Login redirect timeout. Current URL: {current_url}")
             if 'login' in current_url.lower():
-                print("Login may have failed - still on login page")
+                print_with_time("Login may have failed - still on login page")
                 screenshot_bytes = page.screenshot()
                 save_screenshot(screenshot_bytes, "finnegans_login_failed_page.png")
                 return None, None, None
             
-        time.sleep(2)
+        time.sleep(1)
         return browser, context, page
         
     except Exception as e:
-        print(f"Error during login: {e}")
+        print_with_time(f"Error during login: {e}")
         if context:
             context.close()
         if browser:
@@ -222,175 +256,186 @@ def select_company( page, company_labels, company_checkboxs, company_checkboxes_
         company = company_labels.nth(i).inner_text().strip()
         checked = company_checkboxs.nth(i).is_checked()
         
-        print(f"Found company: {company} (checked: {checked})")
+        print_with_time(f"Found company: {company} (checked: {checked})")
         
         if company == target_company:
             if not checked:
-                print(f"Selecting company: {company}")
+                print_with_time(f"Selecting company: {company}")
                 company_checkboxes_angular.nth(i).click()
                 time.sleep(1)  # Esperar un momento para que el cambio se registre
             else:
-                print(f"Company {company} is already selected")
+                print_with_time(f"Company {company} is already selected")
                 page.keyboard.press("Escape")
             return True
     
-    print(f"Company {target_company} not found in the list")
+    print_with_time(f"Company {target_company} not found in the list")
     return False
 
+def select_company_action(page, target_company: str) -> bool:
+    print_with_time("Selecting company...")
+    page.get_by_text('Empresa', exact=True).click()
+    time.sleep(1)
+    
+    dialog = page.locator('.mdc-dialog__container')
+    company_labels = dialog.locator("label")
+    print_with_time(f"Found {company_labels.count()} companies in the list")
+    
+    company_checkboxs = dialog.locator("input[type='checkbox']")
+    company_checkboxs_angular = dialog.locator(".p-checkbox-box")
+    select_company(page, company_labels, company_checkboxs, company_checkboxs_angular, target_company)
+    print_with_time("Company selected")
+    
+def navigate_to_section(page, section_name: str) -> bool:
+    print_with_time(f"Trying to navigate to: {section_name}")
+    
+    try:
+        print_with_time(f"Navigating to {section_name} section...")
+        page.locator("#menu_button i").click()
+        
+        page.get_by_role("button", name="Gestión Empresarial").click()
+        page.get_by_text("Ventas", exact=True).click()
+        
+        page.get_by_text("Facturas").click()
+        #new_page = new_page_info.value
+        time.sleep(1)
+        #page.wait_for_load_state('networkidle', timeout=10000)
+        print_with_time(f"Navigated to {section_name} section")
+        screenshot_bytes = page.screenshot()
+        save_screenshot(screenshot_bytes, "finnegans_facturacion_loaded.png")
+        
+    
+        return True
+    except Exception as e:
+        print_with_time(f"Error navigating to {section_name}: {e}")
+        return False
+def create_new_invoice(page, remito):
+    print_with_time(f"Creating new invoice for remito: {remito['comprobante']}")
+    # Aquí se pueden agregar los pasos para crear una nueva factura usando los datos del remito
+    # Por ejemplo, llenar formularios, seleccionar opciones, etc.
+    # Esto dependerá de la estructura específica de la página y los datos disponibles en `remito`
+    
 
+    time.sleep(1)
+    print_with_time("Nueva Factura button is visible")
+    screenshot_bytes = page.screenshot()
+    save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_1.png")
+    
+    frame = page.frames[1] # Ajusta el índice según sea necesario
+    
+    print_with_time("Presionar boton nueva factura")
+    btn_nueva_factura = frame.locator("#ActionNewDF")
+    btn_nueva_factura.click()
+    
+    current_company = page.locator(".current-empresa-name-container").inner_text()
+    
+    if "AVIANCA" not in current_company:
+    
+        elemento = frame.locator("ul >> text=Factura de Venta Electrónica 0005")
+    else:
+        elemento = frame.locator("ul >> text=Cotizacion sin Stock")
+        
+    elemento.click()
+    
+    print_with_time("seleccion del tipo de factura ")
+    time.sleep(2)
+    print_with_time("Nueva Factura button is visible")
+    screenshot_bytes = page.screenshot()
+    save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_2.png")
+    
+    asistente = frame.locator("input[type=radio][name='WizardWorkflowSelect'][value='160']")
+    asistente.click()
+    time.sleep(1)
+    print_with_time("Nueva Factura button is visible")
+    screenshot_bytes = page.screenshot()
+    save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_3.png")
+    
+    frame.locator('#OPERACIONSIGUIENTEPASO1_0').click()
+    time.sleep(1)
+    return frame
+
+def search_and_make_invoice(page, frame, remito) -> None:
+    
+    print_with_time("Exploring navigation to add remito details...")
+        
+    frame.locator("button[onclick^='VRefrescarOperaciones']").click()
+    time.sleep(2)
+    
+    
+    grid_bodys = frame.locator("div.webix_ss_body")
+    
+    for i in range(grid_bodys.count()):
+        if grid_bodys.nth(i).is_visible() == True:
+            grid_body = grid_bodys.nth(i)
+            break
+            
+    time.sleep(1)
+    
+    cells = grid_body.locator("div.webix_cell")
+    
+    print_with_time(f"Found {cells.count()} cells in the grid")
+    
+    print_with_time(f"Filtering for remito: {remito['comprobante']}")
+    if cells.count() > 0:
+        print_with_time(f"Se encontraron registros {cells.count()}")
+        filters = frame.locator("input.TOOLBARTooltipSearch")
+        filters.nth(6).fill(remito["comprobante"])
+        filters.nth(6).press('Enter')
+        time.sleep(2)
+        cantidad_registros = grid_body.locator("div.webix_cell")
+        if cantidad_registros.count() >0:
+            frame.locator("input.mainCheckbox").nth(1).check()
+            time.sleep(1)
+            frame.locator('#OPERACIONSIGUIENTEPASO2_0').click()
+            time.sleep(1)
+            frame.locator('#OPERACIONFINALIZAR_0').click()
+            time.sleep(3)
+            
+            print_with_time("Ingresando al detalle de la factura")
+            boton_cerrar = frame.locator("#close")
+            boton_cerrar.nth(1).click()
+            time.sleep(1)
+            popup = frame.locator("div.fafpopup")
+            if popup.is_visible() == True:
+                close_button = frame.locator("#showAskPopupNoButton")
+                close_button.click()
+                time.sleep(3)
+            pass
+        else:
+            print_with_time("No se encontraron registros para el remito")
+        pass
+    
 def ejecutar_factura_avianca(page, remito) -> None:
     try:
         #
         # Seleccionar la empresa borde superior derecho
         #
         #
-        print("Selecting company...")
-        page.get_by_text('Empresa', exact=True).click()
-        time.sleep(1)
-        
-        dialog = page.locator('.mdc-dialog__container')
-        company_labels = dialog.locator("label")
-        print(f"Found {company_labels.count()} companies in the list")
-        
-        company_checkboxs = dialog.locator("input[type='checkbox']")
-        company_checkboxs_angular = dialog.locator(".p-checkbox-box")
-        select_company(page, company_labels, company_checkboxs, company_checkboxs_angular, 'AVIANCA')
-        print("Company selected")
-        
-        
-        # Navegar a la sección de facturación
-        
-        print("Navigating to Facturacion section...")
-        page.locator("#menu_button i").click()
-        
-        page.get_by_role("button", name="Gestión Empresarial").click()
-        page.get_by_text("Ventas", exact=True).click()
-        #page.get_by_text("Facturas").click()
-        
-        
-        # page.wait_for_url(lambda url: 'login' not in url.lower(), timeout=15000)
-        # current_url = page.url
-        # print(f"Login successful! Redirected to: {current_url}")
-        
-        # Tomar screenshot de la página después del login
-       
-        
-        
-        
-        
-        #with context.expect_page() as new_page_info:
-        page.get_by_text("Facturas").click()
-        #new_page = new_page_info.value
-        time.sleep(2)
-        #page.wait_for_load_state('networkidle', timeout=10000)
-        print("Navigated to Facturas section")
-        screenshot_bytes = page.screenshot()
-        save_screenshot(screenshot_bytes, "finnegans_facturacion_loaded.png")
-        
-        time.sleep(2)
-        print("Nueva Factura button is visible")
-        screenshot_bytes = page.screenshot()
-        save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_1.png")
-        
-        frame = page.frames[1] # Ajusta el índice según sea necesario
-        
-        print("Presionar boton nueva factura")
-        btn_nueva_factura = frame.locator("#ActionNewDF")
-        btn_nueva_factura.click()
-        
-        current_company = page.locator(".current-empresa-name-container").inner_text()
-        
-        if "AVIANCA" not in current_company:
-        
-            elemento = frame.locator("ul >> text=Factura de Venta Electrónica 0005")
-        else:
-            elemento = frame.locator("ul >> text=Cotizacion sin Stock")
-            
-        elemento.click()
-        
-        print("seleccion del tipo de factura ")
-        time.sleep(2)
-        print("Nueva Factura button is visible")
-        screenshot_bytes = page.screenshot()
-        save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_2.png")
-        
-        asistente = frame.locator("input[type=radio][name='WizardWorkflowSelect'][value='160']")
-        asistente.click()
-        time.sleep(1)
-        print("Nueva Factura button is visible")
-        screenshot_bytes = page.screenshot()
-        save_screenshot(screenshot_bytes, "finnegans_facturacion_nueva_factura_3.png")
-        
-        frame.locator('#OPERACIONSIGUIENTEPASO1_0').click()
-        time.sleep(1)
-        
-        
-        #busqueda = frame.locator('#NAME_VORGANIZACION_0')
-        #busqueda.type('TRANSVIP S.A.')
-        #time.sleep(1)
-
-        #busqueda.press('Enter')
-        #time.sleep(1)
-        
-        frame.locator("button[onclick^='VRefrescarOperaciones']").click()
-        time.sleep(2)
-        
-        
-        grid_bodys = frame.locator("div.webix_ss_body")
-        
-        for i in range(grid_bodys.count()):
-            if grid_bodys.nth(i).is_visible() == True:
-                grid_body = grid_bodys.nth(i)
-                break
+        select_company_action(page, 'AVIANCA')
                 
-        time.sleep(1)
+        # Navegar a la sección de facturación
+        navigate_to_section(page, "Facturación")
         
-        cells = grid_body.locator("div.webix_cell")
+        frame = create_new_invoice(page, remito)
         
-        print(f"Found {cells.count()} cells in the grid")
+        search_and_make_invoice(page, frame, remito)
         
-        print(f"Filtering for remito: {remito['comprobante']}")
-        if cells.count() > 0:
-            print(f"Se encontraron registros {cells.count()}")
-            filters = frame.locator("input.TOOLBARTooltipSearch")
-            filters.nth(6).fill(remito["comprobante"])
-            filters.nth(6).press('Enter')
-            time.sleep(2)
-            cantidad_registros = grid_body.locator("div.webix_cell")
-            if cantidad_registros.count() >0:
-                frame.locator("input.mainCheckbox").nth(1).check()
-                time.sleep(1)
-                frame.locator('#OPERACIONSIGUIENTEPASO2_0').click()
-                time.sleep(1)
-                frame.locator('#OPERACIONFINALIZAR_0').click()
-                time.sleep(3)
-                boton_cerrar = frame.locator("#close")
-                boton_cerrar.nth(1).click()
-                time.sleep(1)
-                popup = frame.locator("div.fafpopup")
-                if popup.is_visible() == True:
-                    close_button = frame.locator("#showAskPopupNoButton")
-                    close_button.click()
-                    time.sleep(3)
-                pass
-            else:
-                print("No se encontraron registros para el remito")
-            pass
+        
+        
         
            
     except Exception as e:
-        print(f"Error exploring navigation: {e}")
+        print_with_time(f"Error exploring navigation: {e}")
     
-    print("Ready for additional facturacion operations...")
+    print_with_time("Ready for additional facturacion operations...")
     
 def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) -> None:
     if not page:
-        print("Error: No active page session")
+        print_with_time("Error: No active page session")
         return
         
-    print("=== FACTURACION MODULE ===")
+    print_with_time("=== FACTURACION MODULE ===")
     current_url = page.url
-    print(f"Current URL: {current_url}")
+    print_with_time(f"Current URL: {current_url}")
     
     # Tomar screenshot del estado actual
     screenshot_bytes = page.screenshot()
@@ -398,64 +443,64 @@ def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) 
     
     # Buscar elementos de navegación o menús
     for remito in resumen:
-        print(f"Processing remito: {remito['comprobante']} for client {remito['cliente']}")
+        print_with_time(f"Processing remito: {remito['comprobante']} for client {remito['cliente']}")
         ejecutar_factura_avianca(page, remito)
         # Aquí se pueden agregar más pasos para completar la factura según los datos del remito
 
 def run_finnegans_reports(browser, context, page) -> None:
     if not page:
-        print("Error: No active page session")
+        print_with_time("Error: No active page session")
         return
         
-    print("=== REPORTS MODULE ===")
+    print_with_time("=== REPORTS MODULE ===")
     current_url = page.url
-    print(f"Current URL: {current_url}")
+    print_with_time(f"Current URL: {current_url}")
     
     screenshot_bytes = page.screenshot()
     save_screenshot(screenshot_bytes, "finnegans_reports_start.png")
-    print("Ready for reports operations...")
+    print_with_time("Ready for reports operations...")
 
-def navigate_to_section(page, section_name: str) -> bool:
-    """
-    Navega a una sección específica del sistema
-    """
-    print(f"Trying to navigate to: {section_name}")
-    
-    try:
-        # Buscar enlaces que contengan el nombre de la sección
-        section_link = page.locator(f'a:has-text("{section_name}")').first
-        if section_link.is_visible():
-            section_link.click()
-            page.wait_for_load_state('networkidle', timeout=10000)
-            print(f"Successfully navigated to {section_name}")
-            return True
-        else:
-            print(f"Could not find navigation link for {section_name}")
-            return False
-    except Exception as e:
-        print(f"Error navigating to {section_name}: {e}")
-        return False
+
     
 def close_finnegans_session(browser, context):
     if context:
+        # Obtener el path del video antes de cerrar el contexto (solo si está habilitado)
+        enable_video = os.getenv('ENABLE_VIDEO_RECORDING', 'false').lower() == 'true'
+        if enable_video:
+            try:
+                pages = context.pages
+                for page in pages:
+                    if hasattr(page, 'video') and page.video:
+                        video_path = page.video.path()
+                        if video_path:
+                            print_with_time(f"Video grabado guardado en: {video_path}")
+                            break
+            except Exception as e:
+                print_with_time(f"Error obteniendo path del video: {e}")
+            
+            print_with_time("Video recording stopped")
+        
         context.close()
     if browser:
         browser.close()
-    print("Session closed")
+    print_with_time("Session closed")
     
 def main():
-    print("Starting Finnegans login automation...")
+    inicio = datetime.now()
+    print_with_time("Starting Finnegans login automation...")
+    print_with_time(f"Fecha y hora de inicio: {inicio.strftime('%Y-%m-%d %H:%M:%S')}")
     
     
     remitos = get_remitos_pendientes("AVIANCA")
     
     resumen = resumir_transacciones(remitos)
+    print_with_time(f"Found {len(resumen)} unique remitos to process")
     if len(resumen) > 0 and resumen is not None:
         with sync_playwright() as playwright:
             browser, context, page = run_finnegans_login(playwright)
             
             if browser and context and page:
-                print(f"\n=== POST-LOGIN URL: {page.url} ===")
+                print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
                 
                 
                     #Ejecutar diferentes módulos
@@ -467,7 +512,12 @@ def main():
                 #input("\nPress Enter to close browser...")
                 close_finnegans_session(browser, context)
             else:
-                print("Login failed, skipping additional operations")
+                print_with_time("Login failed, skipping additional operations")
+    
+    fin = datetime.now()
+    tiempo_transcurrido = fin - inicio
+    print_with_time(f"Fecha y hora de finalización: {fin.strftime('%Y-%m-%d %H:%M:%S')}")
+    print_with_time(f"Tiempo transcurrido: {tiempo_transcurrido}")
 
 if __name__ == "__main__":
     main()
