@@ -177,7 +177,7 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
     else:
         print_with_time("Video recording disabled")
     
-    browser = playwright.chromium.launch(headless=False)
+    browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(**context_options)
     page = context.new_page()
     
