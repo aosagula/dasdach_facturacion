@@ -177,10 +177,12 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
     else:
         print_with_time("Video recording disabled")
     
-    browser = playwright.chromium.launch(headless=True)
+    # Configurar modo headless desde variable de entorno
+    headless_mode = os.getenv('HEADLESS', 'true').lower() == 'true'
+    browser = playwright.chromium.launch(headless=headless_mode)
     context = browser.new_context(**context_options)
     page = context.new_page()
-    
+    install_hud(context)
     try:
         print_with_time("Navigating to Finnegans login page...")
         page.goto(webpage)
@@ -406,11 +408,7 @@ def search_and_make_invoice(page, frame, remito) -> None:
     
 def ejecutar_factura_avianca(page, remito) -> None:
     try:
-        #
-        # Seleccionar la empresa borde superior derecho
-        #
-        #
-        select_company_action(page, 'AVIANCA')
+        
                 
         # Navegar a la sección de facturación
         navigate_to_section(page, "Facturación")
@@ -440,13 +438,14 @@ def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) 
     # Tomar screenshot del estado actual
     screenshot_bytes = page.screenshot()
     save_screenshot(screenshot_bytes, "finnegans_facturacion_start.png")
-    
+    select_company_action(page, 'AVIANCA')
     # Buscar elementos de navegación o menús
     for remito in resumen:
         print_with_time(f"Processing remito: {remito['comprobante']} for client {remito['cliente']}")
+        show_comprobante(page, f"Procesando remito: {remito['comprobante']}")
         ejecutar_factura_avianca(page, remito)
         # Aquí se pueden agregar más pasos para completar la factura según los datos del remito
-
+        hide_comprobante(page)
 def run_finnegans_reports(browser, context, page) -> None:
     if not page:
         print_with_time("Error: No active page session")
@@ -484,6 +483,57 @@ def close_finnegans_session(browser, context):
     if browser:
         browser.close()
     print_with_time("Session closed")
+
+def install_hud(context):
+    context.add_init_script("""
+        window.__hud = (function(){
+      const ID='a4b-hud-banner';
+      function ensure(){
+        let el = document.getElementById(ID);
+        if (!el) {
+          el = document.createElement('div');
+          el.id = ID;
+          el.style.cssText = [
+            'position:fixed',
+            'top:20px',
+            'left:50%',
+            'transform:translateX(-50%)',
+            'background:rgba(0,0,0,0.8)',
+            'color:#fff',
+            'padding:10px 20px',
+            'border-radius:12px',
+            'font:600 15px system-ui, sans-serif',
+            'z-index:2147483647',
+            'pointer-events:none',
+            'border:3px solid #02ceff',         /* 🔹 RECUADRO CELESTE */
+            'box-shadow:0 4px 20px rgba(0,0,0,.6)',
+            'backdrop-filter: blur(2px)',
+            'text-align:center',
+            'max-width:70vw'
+          ].join(';');
+          el.setAttribute('aria-live','polite');
+          document.body.appendChild(el);
+        }
+        return el;
+      }
+      return {
+        set(text){
+          const el = ensure();
+          el.textContent = text || '';
+        },
+        hide(){
+          const el = document.getElementById(ID);
+          if (el) el.remove();
+        }
+      };
+    })();
+    """)
+    
+def show_comprobante(page, texto):
+    page.evaluate(f"window.__hud && window.__hud.set('{texto}')")
+
+def hide_comprobante(page):
+    page.evaluate("window.__hud && window.__hud.hide()")
     
 def main():
     inicio = datetime.now()
