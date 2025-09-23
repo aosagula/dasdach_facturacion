@@ -14,8 +14,18 @@ logger = logging.getLogger(__name__)
 
 # ==================== DIRECTORIOS PARA GUARDAR ARCHIVOS ====================
 
+# Detectar si estamos en desarrollo o producción
+def get_base_dir():
+    """Detecta el directorio base según el entorno"""
+    # Si existe /app, estamos en producción (Docker/Railway)
+    if Path("/app").exists():
+        return Path("/app")
+    else:
+        # En desarrollo, usar el directorio actual del proyecto
+        return Path(__file__).parent
+
 # Directorio base para todos los archivos
-BASE_DIR = Path("/app")
+BASE_DIR = get_base_dir()
 
 # Directorios específicos (USAR ESTOS EN TUS SCRIPTS)
 PHOTOS_DIR = BASE_DIR / "media" / "photos"      # Para fotos/imágenes

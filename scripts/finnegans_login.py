@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 import threading
+import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def timestamp() -> str:
@@ -393,6 +394,13 @@ def search_and_make_invoice(page, frame, remito) -> None:
             time.sleep(3)
             
             print_with_time("Ingresando al detalle de la factura")
+            
+            # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
+            boton_guardar = frame.locator("#_onSave")
+            print_with_time("Guardando la factura")
+            boton_guardar.nth(1).click()
+            time.sleep(5)
+            
             boton_cerrar = frame.locator("#close")
             boton_cerrar.nth(1).click()
             time.sleep(1)
@@ -408,44 +416,66 @@ def search_and_make_invoice(page, frame, remito) -> None:
     
 def ejecutar_factura_avianca(page, remito) -> None:
     try:
-        
-                
         # Navegar a la sección de facturación
-        navigate_to_section(page, "Facturación")
-        
+        if not navigate_to_section(page, "Facturación"):
+            raise Exception("Failed to navigate to Facturación section")
+
         frame = create_new_invoice(page, remito)
-        
+        if not frame:
+            raise Exception("Failed to create new invoice frame")
+
         search_and_make_invoice(page, frame, remito)
-        
-        
-        
-        
-           
+
+        print_with_time(f"Invoice created successfully for remito: {remito['comprobante']}")
+
     except Exception as e:
-        print_with_time(f"Error exploring navigation: {e}")
+        print_with_time(f"Error processing remito {remito['comprobante']}: {e}")
+        # Re-raise the exception to be caught by the calling function
+        raise
     
-    print_with_time("Ready for additional facturacion operations...")
-    
-def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) -> None:
+def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) -> tuple:
     if not page:
         print_with_time("Error: No active page session")
-        return
-        
+        return 0, 0, [], []
+
     print_with_time("=== FACTURACION MODULE ===")
     current_url = page.url
     print_with_time(f"Current URL: {current_url}")
-    
+
     # Tomar screenshot del estado actual
     screenshot_bytes = page.screenshot()
     save_screenshot(screenshot_bytes, "finnegans_facturacion_start.png")
     select_company_action(page, 'AVIANCA')
+
+    # Contadores de éxito y error
+    remitos_exitosos = 0
+    remitos_fallidos = 0
+
+    # Listas para tracking detallado
+    remitos_exitosos_lista = []
+    remitos_fallidos_lista = []
+
     # Buscar elementos de navegación o menús
-    for remito in resumen:
-        print_with_time(f"Processing remito: {remito['comprobante']} for client {remito['cliente']}")
-        show_comprobante(page, f"Procesando remito: {remito['comprobante']}")
-        ejecutar_factura_avianca(page, remito)
-        # Aquí se pueden agregar más pasos para completar la factura según los datos del remito
-        hide_comprobante(page)
+    for i, remito in enumerate(resumen, 1):
+        try:
+            print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']}")
+            show_comprobante(page, f"Procesando remito: {remito['comprobante']} ({i}/{len(resumen)})")
+            ejecutar_factura_avianca(page, remito)
+            remitos_exitosos += 1
+            remitos_exitosos_lista.append(remito['comprobante'])
+            print_with_time(f"✓ Remito {remito['comprobante']} procesado exitosamente")
+        except Exception as e:
+            remitos_fallidos += 1
+            error_trace = traceback.format_exc()
+            error_msg = f"{str(e)}\n{error_trace}"
+            remitos_fallidos_lista.append({'comprobante': remito['comprobante'], 'error': error_msg})
+            print_with_time(f"✗ Error procesando remito {remito['comprobante']}: {str(e)}")
+            print_with_time(f"Stack trace:\n{error_trace}")
+            # Continuar con el siguiente remito sin interrumpir el proceso
+        finally:
+            hide_comprobante(page)
+
+    return remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista
 def run_finnegans_reports(browser, context, page) -> None:
     if not page:
         print_with_time("Error: No active page session")
@@ -539,35 +569,89 @@ def main():
     inicio = datetime.now()
     print_with_time("Starting Finnegans login automation...")
     print_with_time(f"Fecha y hora de inicio: {inicio.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    
+
+
     remitos = get_remitos_pendientes("AVIANCA")
-    
+
     resumen = resumir_transacciones(remitos)
     print_with_time(f"Found {len(resumen)} unique remitos to process")
+
+    remitos_exitosos = 0
+    remitos_fallidos = 0
+    remitos_exitosos_lista = []
+    remitos_fallidos_lista = []
+
     if len(resumen) > 0 and resumen is not None:
         with sync_playwright() as playwright:
             browser, context, page = run_finnegans_login(playwright)
-            
+
             if browser and context and page:
                 print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
-                
-                
-                    #Ejecutar diferentes módulos
-                run_finnegans_facturacion_avianca(browser, context, page, 'AVIANCA', resumen)
-                
+
+                # Ejecutar diferentes módulos
+                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista = run_finnegans_facturacion_avianca(browser, context, page, 'AVIANCA', resumen)
+
                 # Opcional: ejecutar otros módulos
                 # run_finnegans_reports(browser, context, page)
-                
+
                 #input("\nPress Enter to close browser...")
                 close_finnegans_session(browser, context)
             else:
                 print_with_time("Login failed, skipping additional operations")
-    
+                remitos_fallidos = len(resumen)
+                remitos_fallidos_lista = [{'comprobante': r['comprobante'], 'error': 'Login failed'} for r in resumen]
+    else:
+        print_with_time("No remitos found to process")
+
     fin = datetime.now()
     tiempo_transcurrido = fin - inicio
+
+    # Reporte final
+    print_with_time("=" * 50)
+    print_with_time("REPORTE FINAL DE PROCESAMIENTO")
+    print_with_time("=" * 50)
+    print_with_time(f"Total de remitos encontrados: {len(resumen)}")
+    print_with_time(f"Remitos procesados exitosamente: {remitos_exitosos}")
+    print_with_time(f"Remitos con errores: {remitos_fallidos}")
+    if len(resumen) > 0:
+        porcentaje_exito = (remitos_exitosos / len(resumen)) * 100
+        print_with_time(f"Porcentaje de éxito: {porcentaje_exito:.1f}%")
+
+    # Lista detallada de remitos exitosos
+    if remitos_exitosos_lista:
+        print_with_time("")
+        print_with_time("REMITOS PROCESADOS EXITOSAMENTE:")
+        print_with_time("-" * 40)
+        for i, remito in enumerate(remitos_exitosos_lista, 1):
+            print_with_time(f"{i:2d}. {remito} - EXITOSO")
+
+    # Lista detallada de remitos con errores
+    if remitos_fallidos_lista:
+        print_with_time("")
+        print_with_time("REMITOS CON ERRORES:")
+        print_with_time("-" * 40)
+        for i, remito_info in enumerate(remitos_fallidos_lista, 1):
+            print_with_time(f"{i:2d}. {remito_info['comprobante']} - ERROR")
+            # Mostrar solo la primera línea del error en el resumen
+            error_lines = remito_info['error'].split('\n')
+            if error_lines:
+                print_with_time(f"    Error: {error_lines[0]}")
+
+        # Opcionalmente mostrar traces completos si hay pocos errores
+        if len(remitos_fallidos_lista) <= 3:
+            print_with_time("")
+            print_with_time("DETALLES COMPLETOS DE ERRORES:")
+            print_with_time("-" * 40)
+            for i, remito_info in enumerate(remitos_fallidos_lista, 1):
+                print_with_time(f"Error #{i} - Remito {remito_info['comprobante']}:")
+                print_with_time(remito_info['error'])
+                print_with_time("-" * 40)
+
+    print_with_time("")
+    print_with_time(f"Fecha y hora de inicio: {inicio.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Fecha y hora de finalización: {fin.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Tiempo transcurrido: {tiempo_transcurrido}")
+    print_with_time("=" * 50)
 
 if __name__ == "__main__":
     main()

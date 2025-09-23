@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Query
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Query, Form
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -9,10 +9,14 @@ import subprocess
 import psycopg2
 from pathlib import Path
 from dotenv import load_dotenv
-from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR
+from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
+from email_service import send_gmail
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Crear directorios necesarios
+create_directories()
 
 # Configuración de base de datos
 DB_CONFIG = {
@@ -35,6 +39,12 @@ class CuitResponse(BaseModel):
     fecha_emision: Optional[str]
     encontrado: bool
 
+class EmailRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+    body_type: Optional[str] = 'html'  # 'html' o 'text'
+
 app = FastAPI(
     title="Agentic for Business Scripts Runner",
     description="API para ejecutar scripts Python y gestionar archivos multimedia en Railway",
@@ -45,14 +55,14 @@ app = FastAPI(
     }
 )
 
-# Servir archivos estÃ¡ticos
-app.mount("/media/photos", StaticFiles(directory="/app/media/photos"), name="photos")
-app.mount("/media/videos", StaticFiles(directory="/app/media/videos"), name="videos")
-app.mount("/data", StaticFiles(directory="/app/data"), name="data")
+# Servir archivos estáticos usando las rutas dinámicas del file_manager
+app.mount("/media/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
+app.mount("/media/videos", StaticFiles(directory=str(VIDEOS_DIR)), name="videos")
+app.mount("/data", StaticFiles(directory=str(DATA_DIR)), name="data")
 
-# Directorio para archivos subidos
-UPLOAD_DIR = Path("/app/uploads")
-SCRIPTS_DIR = Path("/app/scripts")
+# Directorio para archivos subidos - usar base dinámico
+UPLOAD_DIR = UPLOADS_DIR  # Ya viene del file_manager
+SCRIPTS_DIR = BASE_DIR / "scripts"
 
 @app.get("/",
     summary="Estado del servidor",
@@ -867,11 +877,249 @@ async def get_alicuotas_multiple(request: CuitRequest):
 async def get_alicuotas_get(cuits: List[str] = Query(..., description="Lista de CUITs separados por comas")):
     """
     Consulta las alícuotas de múltiples CUITs vía GET.
-    
+
     Ejemplo de uso:
     - GET /alicuotas/?cuits=20123456784&cuits=27987654321&cuits=30555666777
     """
     return await get_alicuotas_multiple(CuitRequest(cuits=cuits))
+
+# ============= ENDPOINT PARA ENVÍO DE EMAILS =============
+
+@app.post("/send-email/",
+    summary="Enviar email vía Gmail",
+    description="Envía un email usando Gmail API con soporte para adjuntos",
+    response_description="Confirmación del envío del email",
+    responses={
+        200: {
+            "description": "Email enviado exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "sin_adjunto": {
+                            "summary": "Envío sin adjunto",
+                            "description": "Email enviado solo con texto/HTML",
+                            "value": {
+                                "success": True,
+                                "message": "Email enviado exitosamente a usuario@ejemplo.com",
+                                "message_id": "1234567890abcdef",
+                                "details": {
+                                    "to": "usuario@ejemplo.com",
+                                    "subject": "Asunto del email",
+                                    "body_type": "html",
+                                    "attachment": None
+                                }
+                            }
+                        },
+                        "con_adjunto": {
+                            "summary": "Envío con adjunto",
+                            "description": "Email enviado con archivo adjunto",
+                            "value": {
+                                "success": True,
+                                "message": "Email enviado exitosamente a cliente@empresa.com",
+                                "message_id": "0987654321fedcba",
+                                "details": {
+                                    "to": "cliente@empresa.com",
+                                    "subject": "Factura Electrónica",
+                                    "body_type": "html",
+                                    "attachment": "factura_001.pdf"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Parámetros inválidos",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Email de destino requerido"
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Error al enviar email",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": False,
+                        "error": "Error de Gmail API: credenciales inválidas"
+                    }
+                }
+            }
+        }
+    })
+async def send_email_endpoint(
+    email_data: EmailRequest,
+    attachment: Optional[UploadFile] = File(None)
+):
+    """
+    Envía un email usando Gmail API.
+
+    **Parámetros del cuerpo JSON:**
+    - **to**: Email de destino (requerido)
+    - **subject**: Asunto del email (requerido)
+    - **body**: Cuerpo del email en HTML o texto plano (requerido)
+    - **body_type**: Tipo de cuerpo 'html' o 'text' (opcional, por defecto 'html')
+
+    **Archivo adjunto:**
+    - **attachment**: Archivo opcional para adjuntar al email (form-data)
+
+    **Ejemplo de uso con curl:**
+    ```bash
+    # Sin adjunto
+    curl -X POST "http://localhost:8000/send-email/" \
+         -H "Content-Type: application/json" \
+         -d '{
+           "to": "destinatario@email.com",
+           "subject": "Prueba de envío",
+           "body": "<h1>Hola mundo!</h1><p>Este es un email de prueba.</p>",
+           "body_type": "html"
+         }'
+
+    # Con adjunto (usando form-data)
+    curl -X POST "http://localhost:8000/send-email/" \
+         -F 'email_data={"to":"destinatario@email.com","subject":"Con adjunto","body":"<p>Email con archivo adjunto</p>"}' \
+         -F 'attachment=@/ruta/al/archivo.pdf'
+    ```
+
+    **Configuración requerida en .env:**
+    - GMAIL_CLIENT_ID: Client ID de Google Cloud Console
+    - GMAIL_CLIENT_SECRET: Client Secret de Google Cloud Console
+    - GMAIL_PROJECT_ID: Project ID de Google Cloud Console
+    - GMAIL_SENDER_EMAIL: Email del remitente (opcional)
+    - GMAIL_TOKEN_PATH: Ruta del archivo de token (opcional)
+    """
+
+    try:
+        # Validar email de destino
+        if not email_data.to or '@' not in email_data.to:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Email de destino requerido y debe ser válido"}
+            )
+
+        # Validar asunto
+        if not email_data.subject:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Asunto del email requerido"}
+            )
+
+        # Validar cuerpo
+        if not email_data.body:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Cuerpo del email requerido"}
+            )
+
+        attachment_path = None
+        attachment_filename = None
+
+        # Procesar archivo adjunto si se proporciona
+        if attachment:
+            # Crear directorio temporal para adjuntos
+            temp_dir = Path("/tmp/email_attachments")
+            temp_dir.mkdir(exist_ok=True)
+
+            # Guardar archivo temporal
+            attachment_path = temp_dir / attachment.filename
+            attachment_filename = attachment.filename
+
+            with open(attachment_path, "wb") as buffer:
+                shutil.copyfileobj(attachment.file, buffer)
+
+        # Enviar email
+        result = send_gmail(
+            to=email_data.to,
+            subject=email_data.subject,
+            body=email_data.body,
+            body_type=email_data.body_type,
+            attachment_path=str(attachment_path) if attachment_path else None
+        )
+
+        # Limpiar archivo temporal
+        if attachment_path and attachment_path.exists():
+            try:
+                attachment_path.unlink()
+            except:
+                pass  # Ignorar errores de limpieza
+
+        # Preparar respuesta
+        if result.get('success'):
+            response_data = {
+                "success": True,
+                "message": result.get('message'),
+                "message_id": result.get('message_id'),
+                "details": {
+                    "to": email_data.to,
+                    "subject": email_data.subject,
+                    "body_type": email_data.body_type,
+                    "attachment": attachment_filename
+                }
+            }
+            return response_data
+        else:
+            return JSONResponse(
+                status_code=500,
+                content=result
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}"
+            }
+        )
+
+@app.post("/send-email-form/",
+    summary="Enviar email vía formulario (compatible con n8n)",
+    description="Envía email usando parámetros de formulario, ideal para integraciones con n8n HTTP Request nodes",
+    response_description="Confirmación del envío del email"
+)
+async def send_email_form(
+    to: str = Form(..., description="Email de destino"),
+    subject: str = Form(..., description="Asunto del email"),
+    body: str = Form(..., description="Cuerpo del email en HTML o texto"),
+    body_type: str = Form('html', description="Tipo de cuerpo: 'html' o 'text'"),
+    attachment: Optional[UploadFile] = File(None, description="Archivo adjunto opcional")
+):
+    """
+    Versión alternativa del endpoint de email que acepta parámetros via form-data.
+    Especialmente útil para integraciones con n8n HTTP Request nodes.
+
+    **Parámetros de formulario:**
+    - **to**: Email de destino
+    - **subject**: Asunto del email
+    - **body**: Cuerpo del email
+    - **body_type**: 'html' o 'text' (opcional, por defecto 'html')
+    - **attachment**: Archivo adjunto (opcional)
+
+    **Configuración en n8n HTTP Request:**
+    - Method: POST
+    - URL: http://tu-servidor:8000/send-email-form/
+    - Body Content Type: Form-Data
+    - Parameters:
+      - to: {{ $json.email }}
+      - subject: {{ $json.subject }}
+      - body: {{ $json.html_content }}
+      - body_type: html
+      - attachment: [archivo desde nodo anterior]
+    """
+
+    # Crear objeto EmailRequest y reutilizar la lógica existente
+    email_data = EmailRequest(
+        to=to,
+        subject=subject,
+        body=body,
+        body_type=body_type
+    )
+
+    return await send_email_endpoint(email_data, attachment)
 
 @app.get("/storage-info/",
     summary="Información de almacenamiento",
