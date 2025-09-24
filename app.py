@@ -1,12 +1,15 @@
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Query, Form
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Query, Form, Request, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 import shutil
 import subprocess
 import psycopg2
+import asyncio
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
@@ -17,6 +20,21 @@ load_dotenv()
 
 # Crear directorios necesarios
 create_directories()
+
+# Middleware de timeout
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, timeout: int = 30):
+        super().__init__(app)
+        self.timeout = timeout
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            return JSONResponse(
+                status_code=408,
+                content={"error": f"Request timeout after {self.timeout} seconds"}
+            )
 
 # Configuración de base de datos
 DB_CONFIG = {
@@ -54,6 +72,10 @@ app = FastAPI(
         "url": "https://github.com/aosagula/"
     }
 )
+
+# Agregar middleware de timeout (obtener valor desde .env)
+timeout_seconds = int(os.getenv('UVICORN_TIMEOUT', '30'))
+app.add_middleware(TimeoutMiddleware, timeout=timeout_seconds)
 
 # Servir archivos estáticos usando las rutas dinámicas del file_manager
 app.mount("/media/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
@@ -1218,4 +1240,91 @@ async def storage_info():
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
+        )
+
+@app.get("/test-timeout/{delay_minutes}",
+    summary="Probar timeout del servidor",
+    description="Endpoint de prueba que espera un número específico de minutos para probar el comportamiento del timeout",
+    response_description="Respuesta exitosa si el endpoint completa antes del timeout",
+    responses={
+        200: {
+            "description": "Endpoint completado exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Completado exitosamente",
+                        "delay_minutes": 5,
+                        "delay_seconds": 300,
+                        "start_time": "2025-01-20T10:30:00",
+                        "end_time": "2025-01-20T10:35:00",
+                        "elapsed_seconds": 300.1
+                    }
+                }
+            }
+        },
+        408: {
+            "description": "Timeout del servidor",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "Request timeout"
+                    }
+                }
+            }
+        }
+    })
+async def test_timeout(delay_minutes: float):
+    """
+    Endpoint para probar el comportamiento del timeout del servidor.
+
+    - **delay_minutes**: Número de minutos que debe esperar el endpoint (puede ser decimal, ej: 1.5 = 1 minuto 30 segundos)
+
+    Casos de uso:
+    - GET /test-timeout/0.5 - Espera 30 segundos
+    - GET /test-timeout/1 - Espera 1 minuto
+    - GET /test-timeout/25 - Espera 25 minutos (debería superar el timeout de 20 minutos si está configurado así)
+
+    Este endpoint permite verificar si el timeout configurado en uvicorn está funcionando correctamente.
+    Si el delay supera el timeout configurado, el servidor debería cortar la conexión.
+    """
+    try:
+        start_time = time.time()
+        delay_seconds = delay_minutes * 60
+
+        # Información inicial
+        start_time_str = time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_time))
+
+        # Log del inicio
+        print(f"[TIMEOUT TEST] Iniciando delay de {delay_minutes} minutos ({delay_seconds} segundos)")
+        print(f"[TIMEOUT TEST] Hora de inicio: {start_time_str}")
+
+        # Esperar el tiempo especificado usando asyncio.sleep
+        await asyncio.sleep(delay_seconds)
+
+        # Calcular tiempo transcurrido
+        end_time = time.time()
+        elapsed_seconds = end_time - start_time
+        end_time_str = time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time))
+
+        # Log del fin
+        print(f"[TIMEOUT TEST] Delay completado exitosamente")
+        print(f"[TIMEOUT TEST] Hora de fin: {end_time_str}")
+        print(f"[TIMEOUT TEST] Tiempo transcurrido: {elapsed_seconds:.1f} segundos")
+
+        return {
+            "message": "Completado exitosamente",
+            "delay_minutes": delay_minutes,
+            "delay_seconds": delay_seconds,
+            "start_time": start_time_str,
+            "end_time": end_time_str,
+            "elapsed_seconds": round(elapsed_seconds, 1)
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Error durante el delay: {str(e)}",
+                "delay_minutes": delay_minutes
+            }
         )

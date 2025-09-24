@@ -19,4 +19,4 @@ python file_watcher.py &
 python main.py &
 
 # Iniciar servidor web para Railway (debe mantener el contenedor activo)
-uvicorn app:app --host 0.0.0.0 --port $PORT --timeout-keep-alive $UVICORN_TIMEOUT
+uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-keep-alive ${UVICORN_TIMEOUT:-30} --timeout-graceful-shutdown 5 --limit-max-requests 4096

@@ -8,3 +8,5 @@ media
 data
 
 *.png
+
+__pycache__

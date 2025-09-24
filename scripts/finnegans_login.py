@@ -289,6 +289,8 @@ def select_company_action(page, target_company: str) -> bool:
     print_with_time("Company selected")
     
 def navigate_to_section(page, section_name: str) -> bool:
+    
+    time.sleep(2)
     print_with_time(f"Trying to navigate to: {section_name}")
     
     try:
