@@ -12,7 +12,7 @@ import asyncio
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from file_manager import list_saved_files, PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
+from file_manager import PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
 from email_service import send_gmail
 
 # Cargar variables de entorno
@@ -162,10 +162,38 @@ async def health_check():
     })
 async def list_files(file_type: str = None):
     """Listar archivos guardados por tipo (photo, video, data). Si no se especifica tipo, devuelve todos."""
-    files = list_saved_files(file_type)
+
+    def scan_directory_files(directory, file_type, url_prefix):
+        files = []
+        if directory.exists():
+            for file_path in directory.iterdir():
+                if file_path.is_file():
+                    files.append({
+                        "name": file_path.name,
+                        "type": file_type,
+                        "url": f"{url_prefix}/{file_path.name}",
+                        "size": file_path.stat().st_size,
+                        "modified": file_path.stat().st_mtime
+                    })
+        return files
+
+    all_files = []
+
+    if file_type == "photo" or file_type is None:
+        all_files.extend(scan_directory_files(PHOTOS_DIR, "photo", "/media/photos"))
+
+    if file_type == "video" or file_type is None:
+        all_files.extend(scan_directory_files(VIDEOS_DIR, "video", "/media/videos"))
+
+    if file_type == "data" or file_type is None:
+        all_files.extend(scan_directory_files(DATA_DIR, "data", "/data"))
+
+    # Ordenar por fecha de modificación (más recientes primero)
+    all_files.sort(key=lambda x: x["modified"], reverse=True)
+
     return {
-        "files": files,
-        "total": len(files),
+        "files": all_files,
+        "total": len(all_files),
         "file_type": file_type or "all"
     }
 
@@ -192,8 +220,22 @@ async def list_files(file_type: str = None):
     })
 async def list_photos():
     """Lista todas las fotos guardadas en formato JPG, PNG, WebP, etc."""
-    files = list_saved_files("photo")
-    return {"photos": files, "total": len(files)}
+    photos = []
+    if PHOTOS_DIR.exists():
+        for file_path in PHOTOS_DIR.iterdir():
+            if file_path.is_file():
+                photos.append({
+                    "name": file_path.name,
+                    "type": "photo",
+                    "url": f"/media/photos/{file_path.name}",
+                    "size": file_path.stat().st_size,
+                    "modified": file_path.stat().st_mtime
+                })
+
+    # Ordenar por fecha de modificación (más recientes primero)
+    photos.sort(key=lambda x: x["modified"], reverse=True)
+
+    return {"photos": photos, "total": len(photos)}
 
 @app.get("/files/videos/",
     summary="Listar todos los videos",
@@ -218,8 +260,22 @@ async def list_photos():
     })
 async def list_videos():
     """Lista todos los videos guardados en formato MP4, WebM, MOV, etc."""
-    files = list_saved_files("video")
-    return {"videos": files, "total": len(files)}
+    videos = []
+    if VIDEOS_DIR.exists():
+        for file_path in VIDEOS_DIR.iterdir():
+            if file_path.is_file():
+                videos.append({
+                    "name": file_path.name,
+                    "type": "video",
+                    "url": f"/media/videos/{file_path.name}",
+                    "size": file_path.stat().st_size,
+                    "modified": file_path.stat().st_mtime
+                })
+
+    # Ordenar por fecha de modificación (más recientes primero)
+    videos.sort(key=lambda x: x["modified"], reverse=True)
+
+    return {"videos": videos, "total": len(videos)}
 
 @app.get("/download/{file_type}/{filename}",
     summary="Descargar archivo",

@@ -358,7 +358,7 @@ def create_new_invoice(page, remito):
     time.sleep(1)
     return frame
 
-def search_and_make_invoice(page, frame, remito) -> None:
+def search_and_make_invoice_avianca(page, frame, remito) -> None:
     
     print_with_time("Exploring navigation to add remito details...")
         
@@ -416,7 +416,7 @@ def search_and_make_invoice(page, frame, remito) -> None:
             print_with_time("No se encontraron registros para el remito")
         pass
     
-def ejecutar_factura_avianca(page, remito) -> None:
+def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
         if not navigate_to_section(page, "Facturación"):
@@ -425,8 +425,8 @@ def ejecutar_factura_avianca(page, remito) -> None:
         frame = create_new_invoice(page, remito)
         if not frame:
             raise Exception("Failed to create new invoice frame")
-
-        search_and_make_invoice(page, frame, remito)
+        if company == "AVIANCA":
+            search_and_make_invoice_avianca(page, frame, remito)
 
         print_with_time(f"Invoice created successfully for remito: {remito['comprobante']}")
 
@@ -435,7 +435,7 @@ def ejecutar_factura_avianca(page, remito) -> None:
         # Re-raise the exception to be caught by the calling function
         raise
     
-def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) -> tuple:
+def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple:
     if not page:
         print_with_time("Error: No active page session")
         return 0, 0, [], []
@@ -447,7 +447,7 @@ def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) 
     # Tomar screenshot del estado actual
     screenshot_bytes = page.screenshot()
     save_screenshot(screenshot_bytes, "finnegans_facturacion_start.png")
-    select_company_action(page, 'AVIANCA')
+    select_company_action(page, company)
 
     # Contadores de éxito y error
     remitos_exitosos = 0
@@ -462,7 +462,7 @@ def run_finnegans_facturacion_avianca(browser, context, page, company, resumen) 
         try:
             print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']}")
             show_comprobante(page, f"Procesando remito: {remito['comprobante']} ({i}/{len(resumen)})")
-            ejecutar_factura_avianca(page, remito)
+            ejecutar_factura(page, remito, company)
             remitos_exitosos += 1
             remitos_exitosos_lista.append(remito['comprobante'])
             print_with_time(f"✓ Remito {remito['comprobante']} procesado exitosamente")
@@ -567,13 +567,13 @@ def show_comprobante(page, texto):
 def hide_comprobante(page):
     page.evaluate("window.__hud && window.__hud.hide()")
     
-def main():
+def process_company(company: str) -> None:
     inicio = datetime.now()
     print_with_time("Starting Finnegans login automation...")
     print_with_time(f"Fecha y hora de inicio: {inicio.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
-    remitos = get_remitos_pendientes("AVIANCA")
+    remitos = get_remitos_pendientes(company)
 
     resumen = resumir_transacciones(remitos)
     print_with_time(f"Found {len(resumen)} unique remitos to process")
@@ -591,7 +591,7 @@ def main():
                 print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
 
                 # Ejecutar diferentes módulos
-                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista = run_finnegans_facturacion_avianca(browser, context, page, 'AVIANCA', resumen)
+                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista = run_finnegans_facturacion(browser, context, page, company, resumen)
 
                 # Opcional: ejecutar otros módulos
                 # run_finnegans_reports(browser, context, page)
@@ -608,7 +608,7 @@ def main():
     fin = datetime.now()
     tiempo_transcurrido = fin - inicio
 
-    # Reporte final
+def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, tiempo_transcurrido):
     print_with_time("=" * 50)
     print_with_time("REPORTE FINAL DE PROCESAMIENTO")
     print_with_time("=" * 50)
@@ -654,6 +654,13 @@ def main():
     print_with_time(f"Fecha y hora de finalización: {fin.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Tiempo transcurrido: {tiempo_transcurrido}")
     print_with_time("=" * 50)
+    
+def main():
+    
+    #process_company("AVIANCA")
+    process_company("Das Dach")
+    # Reporte final
+
 
 if __name__ == "__main__":
     main()
