@@ -17,10 +17,10 @@ async def run_scheduled_scripts():
     """Ejecutar scripts en horarios programados"""
     
     # Ejemplo: ejecutar script cada 30 minutos
-    schedule.every(30).minutes.do(execute_script, "ejemplo_playwright.py")
+    #schedule.every(30).minutes.do(execute_script, "ejemplo_playwright.py")
     
     # Ejemplo: ejecutar script de video cada 2 horas
-    schedule.every(2).hours.do(execute_script, "ejemplo_video.py")
+    #schedule.every(2).hours.do(execute_script, "ejemplo_video.py")
     
     # Limpiar archivos temporales cada 6 horas
     schedule.every(6).hours.do(cleanup_temp_files, 12)  # Archivos más antiguos que 12 horas

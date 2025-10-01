@@ -1522,6 +1522,7 @@ async def send_email_smtp_endpoint(
     response_description="Confirmación del envío del email"
 )
 async def send_email_n8n_endpoint(
+    request: Request,
     to: str = Form(..., description="Email de destino"),
     subject: str = Form(..., description="Asunto del email"),
     body: str = Form(..., description="Cuerpo del email en HTML o texto"),
@@ -1560,6 +1561,13 @@ async def send_email_n8n_endpoint(
     """
 
     try:
+        # Logging para debug de n8n
+        print(f"[DEBUG] /send-email-n8n/ POST recibido")
+        print(f"[DEBUG] Method: {request.method}")
+        print(f"[DEBUG] URL: {request.url}")
+        print(f"[DEBUG] Headers: {dict(request.headers)}")
+        print(f"[DEBUG] Parámetros: to={to}, subject={subject}")
+
         # Validar parámetros básicos
         if not to or '@' not in to:
             return JSONResponse(
@@ -1671,6 +1679,176 @@ async def send_email_n8n_endpoint(
                 "exception_type": type(e).__name__
             }
         )
+
+@app.api_route("/send-email-n8n-hybrid/", methods=["GET", "POST"],
+    summary="Endpoint híbrido para n8n (GET y POST)",
+    description="Endpoint que maneja tanto GET como POST para n8n"
+)
+async def send_email_n8n_hybrid(
+    request: Request,
+    to: str = Form(None),
+    subject: str = Form(None),
+    body: str = Form(None),
+    body_type: str = Form('html'),
+    attachment: Optional[UploadFile] = File(None)
+):
+    """
+    Endpoint híbrido que maneja GET y POST.
+    Útil cuando n8n hace redirects que cambian el método.
+    """
+
+    method = request.method
+    print(f"[DEBUG] /send-email-n8n-hybrid/ {method} recibido")
+    print(f"[DEBUG] URL: {request.url}")
+
+    if method == "GET":
+        # Obtener parámetros desde query params
+        query_params = dict(request.query_params)
+        to = query_params.get('to')
+        subject = query_params.get('subject')
+        body = query_params.get('body')
+        body_type = query_params.get('body_type', 'html')
+
+        print(f"[DEBUG] GET params: {query_params}")
+
+        if not to or not subject or not body:
+            return {
+                "error": "Parámetros faltantes en GET",
+                "message": "Para GET usa: /send-email-n8n-hybrid/?to=email&subject=asunto&body=mensaje",
+                "received_params": query_params,
+                "required_params": ["to", "subject", "body"],
+                "optional_params": ["body_type"]
+            }
+
+    # Validar parámetros
+    if not to or '@' not in to:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Email de destino requerido y debe ser válido",
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid"
+            }
+        )
+
+    if not subject:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Asunto del email requerido",
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid"
+            }
+        )
+
+    if not body:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Cuerpo del email requerido",
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid"
+            }
+        )
+
+    try:
+        # Procesar archivo adjunto solo en POST
+        attachment_path = None
+        attachment_filename = None
+
+        if method == "POST" and attachment:
+            temp_dir = Path("/tmp/email_attachments")
+            temp_dir.mkdir(exist_ok=True)
+            attachment_path = temp_dir / attachment.filename
+            attachment_filename = attachment.filename
+            with open(attachment_path, "wb") as buffer:
+                shutil.copyfileobj(attachment.file, buffer)
+
+        # Enviar email
+        result = send_smtp_standalone(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
+            attachment_path=str(attachment_path) if attachment_path else None
+        )
+
+        # Limpiar archivo temporal
+        if attachment_path and attachment_path.exists():
+            try:
+                attachment_path.unlink()
+            except:
+                pass
+
+        # Preparar respuesta
+        if result.get('success'):
+            return {
+                "success": True,
+                "message": result.get('message'),
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid",
+                "details": {
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": attachment_filename
+                }
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": result.get('error'),
+                    "method": method,
+                    "endpoint": "send-email-n8n-hybrid"
+                }
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}",
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid"
+            }
+        )
+
+@app.get("/send-email-n8n/",
+    summary="Endpoint GET para send-email-n8n (redirect info)",
+    description="Endpoint informativo para cuando se accede vía GET en lugar de POST"
+)
+async def send_email_n8n_get():
+    """
+    Endpoint GET informativo para send-email-n8n.
+    Ayuda cuando n8n hace un redirect o GET accidental.
+    """
+    return {
+        "error": "Método incorrecto",
+        "message": "Este endpoint requiere método POST, no GET",
+        "endpoint": "/send-email-n8n/",
+        "method_required": "POST",
+        "content_type": "multipart/form-data",
+        "alternative_endpoint": "/send-email-n8n-hybrid/ (acepta GET y POST)",
+        "parameters": {
+            "to": "email@destino.com",
+            "subject": "Asunto del email",
+            "body": "Cuerpo del email",
+            "body_type": "html (opcional)",
+            "attachment": "archivo (opcional)"
+        },
+        "n8n_config": {
+            "method": "POST",
+            "url": "{{$node[\"Webhook\"].json[\"base_url\"]}}/send-email-n8n/",
+            "body_content_type": "Form-Data",
+            "note": "Asegúrate de usar POST, no GET. O usa /send-email-n8n-hybrid/"
+        }
+    }
 
 @app.get("/smtp-config/",
     summary="Verificar configuración SMTP",
