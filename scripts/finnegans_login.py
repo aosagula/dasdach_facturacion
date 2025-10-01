@@ -415,7 +415,108 @@ def search_and_make_invoice_avianca(page, frame, remito) -> None:
         else:
             print_with_time("No se encontraron registros para el remito")
         pass
+   
+def get_alicuotas(cuits: List[str]) -> Dict[str, Any]:
+    """Consulta el endpoint de alícuotas para una lista de CUITs"""
+    load_dotenv()
+    url_alicuotas = os.getenv('FINNEGANS_ALICUOTAS_URL', 'http://localhost:8000/alicuotas/')
+    url = f"{url_alicuotas}?cuits={','.join(cuits)}"
     
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print_with_time(f"Error al obtener las alícuotas: {response.status_code} - {response.text}")
+        return {}
+def search_and_make_invoice_dasdach(page, frame, remito) -> None:
+    
+    print_with_time("Exploring navigation to add remito details...")
+        
+    frame.locator("button[onclick^='VRefrescarOperaciones']").click()
+    time.sleep(2)
+    
+    
+    grid_bodys = frame.locator("div.webix_ss_body")
+    
+    for i in range(grid_bodys.count()):
+        if grid_bodys.nth(i).is_visible() == True:
+            grid_body = grid_bodys.nth(i)
+            break
+            
+    time.sleep(1)
+    
+    cells = grid_body.locator("div.webix_cell")
+    
+    print_with_time(f"Found {cells.count()} cells in the grid")
+    
+    print_with_time(f"Filtering for remito: {remito['comprobante']}")
+    if cells.count() > 0:
+        print_with_time(f"Se encontraron registros {cells.count()}")
+        filters = frame.locator("input.TOOLBARTooltipSearch")
+        filters.nth(6).fill(remito["comprobante"])
+        filters.nth(6).press('Enter')
+        time.sleep(2)
+        cantidad_registros = grid_body.locator("div.webix_cell")
+        if cantidad_registros.count() >0:
+            frame.locator("input.mainCheckbox").nth(1).check()
+            time.sleep(1)
+            frame.locator('#OPERACIONSIGUIENTEPASO2_0').click()
+            time.sleep(1)
+            frame.locator('#OPERACIONFINALIZAR_0').click()
+            time.sleep(3)
+            
+            print_with_time("Ingresando al detalle de la factura")
+            
+            #TODO: agregar llamada al endpoint de alicuotas
+            # endpoint : curl -X 'GET' \
+            #                   'http://localhost:8000/alicuotas/?cuits=20223012931' \
+            #                   -H 'accept: application/json'
+            # resultado OK :
+            # {
+            #    "resultados": [
+            #        {
+            #        "cuit": "20223012931",
+            #        "alicuota": null,
+            #        "vigencia_desde": null,
+            #        "vigencia_hasta": null,
+            #        "fecha_emision": null,
+            #        "encontrado": false
+            #        }
+            #    ],
+            #    "total_consultados": 1,
+            #    "encontrados": 0,
+            #    "no_encontrados": 1
+            #}
+            
+            cuit = re.sub(r'\D', '', remito['nro_de_identificacion'])
+            alicuotas_info = get_alicuotas([cuit])
+            
+            
+            
+            # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
+            # boton_guardar = frame.locator("#_onSave")
+            # print_with_time("Guardando la factura")
+            # boton_guardar.nth(1).click()
+            # time.sleep(5)
+            
+            boton_cerrar = frame.locator("#close")
+            boton_cerrar.nth(1).click()
+            time.sleep(1)
+            popup = frame.locator("div.fafpopup")
+            if popup.is_visible() == True:
+                close_button = frame.locator("#showAskPopupNoButton")
+                close_button.click()
+                time.sleep(3)
+            pass
+        else:
+            print_with_time("No se encontraron registros para el remito")
+        pass
+     
 def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
@@ -427,7 +528,8 @@ def ejecutar_factura(page, remito, company) -> None:
             raise Exception("Failed to create new invoice frame")
         if company == "AVIANCA":
             search_and_make_invoice_avianca(page, frame, remito)
-
+        else:
+            search_and_make_invoice_dasdach(page, frame, remito)
         print_with_time(f"Invoice created successfully for remito: {remito['comprobante']}")
 
     except Exception as e:
@@ -460,7 +562,7 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
     # Buscar elementos de navegación o menús
     for i, remito in enumerate(resumen, 1):
         try:
-            print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']}")
+            print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']}")
             show_comprobante(page, f"Procesando remito: {remito['comprobante']} ({i}/{len(resumen)})")
             ejecutar_factura(page, remito, company)
             remitos_exitosos += 1
@@ -657,8 +759,8 @@ def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, re
     
 def main():
     
-    #process_company("AVIANCA")
-    process_company("Das Dach")
+    process_company("AVIANCA")
+    #process_company("Das Dach")
     # Reporte final
 
 
