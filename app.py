@@ -1954,39 +1954,39 @@ async def send_email_get(
             }
         )
 
-@app.get("/send-email-n8n/",
-    summary="Endpoint GET para send-email-n8n (redirect info)",
-    description="Endpoint informativo para cuando se accede vía GET en lugar de POST"
-)
-async def send_email_n8n_get():
-    """
-    Endpoint GET informativo para send-email-n8n.
-    Ayuda cuando n8n hace un redirect o GET accidental.
-    """
-    return {
-        "error": "Método incorrecto",
-        "message": "Este endpoint requiere método POST, no GET",
-        "endpoint": "/send-email-n8n/",
-        "method_required": "POST",
-        "content_type": "multipart/form-data",
-        "alternative_endpoints": {
-            "hybrid": "/send-email-n8n-hybrid/ (acepta GET y POST)",
-            "get_only": "/send-email-get/ (solo GET, más simple)"
-        },
-        "parameters": {
-            "to": "email@destino.com",
-            "subject": "Asunto del email",
-            "body": "Cuerpo del email",
-            "body_type": "html (opcional)",
-            "attachment": "archivo (opcional)"
-        },
-        "n8n_config": {
-            "method": "POST",
-            "url": "{{$node[\"Webhook\"].json[\"base_url\"]}}/send-email-n8n/",
-            "body_content_type": "Form-Data",
-            "note": "Asegúrate de usar POST, no GET. O usa /send-email-n8n-hybrid/"
-        }
-    }
+# @app.get("/send-email-n8n/",
+#     summary="Endpoint GET para send-email-n8n (redirect info)",
+#     description="Endpoint informativo para cuando se accede vía GET en lugar de POST"
+# )
+# async def send_email_n8n_get():
+#     """
+#     Endpoint GET informativo para send-email-n8n.
+#     Ayuda cuando n8n hace un redirect o GET accidental.
+#     """
+#     return {
+#         "error": "Método incorrecto",
+#         "message": "Este endpoint requiere método POST, no GET",
+#         "endpoint": "/send-email-n8n/",
+#         "method_required": "POST",
+#         "content_type": "multipart/form-data",
+#         "alternative_endpoints": {
+#             "hybrid": "/send-email-n8n-hybrid/ (acepta GET y POST)",
+#             "get_only": "/send-email-get/ (solo GET, más simple)"
+#         },
+#         "parameters": {
+#             "to": "email@destino.com",
+#             "subject": "Asunto del email",
+#             "body": "Cuerpo del email",
+#             "body_type": "html (opcional)",
+#             "attachment": "archivo (opcional)"
+#         },
+#         "n8n_config": {
+#             "method": "POST",
+#             "url": "{{$node[\"Webhook\"].json[\"base_url\"]}}/send-email-n8n/",
+#             "body_content_type": "Form-Data",
+#             "note": "Asegúrate de usar POST, no GET. O usa /send-email-n8n-hybrid/"
+#         }
+#     }
 
 @app.get("/smtp-config/",
     summary="Verificar configuración SMTP",
