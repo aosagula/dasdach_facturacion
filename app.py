@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 from file_manager import PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
-from email_service import send_gmail
+from email_service import send_email_smtp
+from smtp_standalone import send_smtp_standalone
 
 # Cargar variables de entorno
 load_dotenv()
@@ -1030,67 +1031,108 @@ async def get_alicuotas_get(cuits: List[str] = Query(..., description="Lista de 
         }
     })
 async def send_email_endpoint(
-    email_data: EmailRequest,
+    request: Request,
     attachment: Optional[UploadFile] = File(None)
 ):
     """
-    Envía un email usando Gmail API.
+    Envía un email usando SMTP standalone (modificado para evitar problemas con Gmail API).
+    Acepta tanto JSON como form-data.
 
-    **Parámetros del cuerpo JSON:**
-    - **to**: Email de destino (requerido)
-    - **subject**: Asunto del email (requerido)
-    - **body**: Cuerpo del email en HTML o texto plano (requerido)
-    - **body_type**: Tipo de cuerpo 'html' o 'text' (opcional, por defecto 'html')
-
-    **Archivo adjunto:**
-    - **attachment**: Archivo opcional para adjuntar al email (form-data)
-
-    **Ejemplo de uso con curl:**
-    ```bash
-    # Sin adjunto
-    curl -X POST "http://localhost:8000/send-email/" \
-         -H "Content-Type: application/json" \
-         -d '{
-           "to": "destinatario@email.com",
-           "subject": "Prueba de envío",
-           "body": "<h1>Hola mundo!</h1><p>Este es un email de prueba.</p>",
-           "body_type": "html"
-         }'
-
-    # Con adjunto (usando form-data)
-    curl -X POST "http://localhost:8000/send-email/" \
-         -F 'email_data={"to":"destinatario@email.com","subject":"Con adjunto","body":"<p>Email con archivo adjunto</p>"}' \
-         -F 'attachment=@/ruta/al/archivo.pdf'
+    **Modo 1 - JSON (Content-Type: application/json):**
+    ```json
+    {
+        "to": "destinatario@email.com",
+        "subject": "Asunto",
+        "body": "Mensaje",
+        "body_type": "html"
+    }
     ```
 
+    **Modo 2 - Form-data:**
+    - to: Email destino
+    - subject: Asunto
+    - body: Mensaje
+    - body_type: html/text
+    - attachment: archivo (opcional)
+
     **Configuración requerida en .env:**
-    - GMAIL_CLIENT_ID: Client ID de Google Cloud Console
-    - GMAIL_CLIENT_SECRET: Client Secret de Google Cloud Console
-    - GMAIL_PROJECT_ID: Project ID de Google Cloud Console
-    - GMAIL_SENDER_EMAIL: Email del remitente (opcional)
-    - GMAIL_TOKEN_PATH: Ruta del archivo de token (opcional)
+    ```
+    SMTP_SERVER=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USERNAME=tu-email@gmail.com
+    SMTP_PASSWORD=tu-app-password
+    SMTP_SENDER_EMAIL=tu-email@gmail.com
+    ```
     """
 
     try:
-        # Validar email de destino
-        if not email_data.to or '@' not in email_data.to:
+        # Detectar tipo de contenido
+        content_type = request.headers.get("content-type", "").lower()
+
+        if "application/json" in content_type:
+            # Modo JSON
+            try:
+                json_data = await request.json()
+                to = json_data.get('to')
+                subject = json_data.get('subject')
+                body = json_data.get('body')
+                body_type = json_data.get('body_type', 'html')
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Error parseando JSON: {str(e)}",
+                        "endpoint": "send-email"
+                    }
+                )
+        else:
+            # Modo form-data
+            try:
+                form_data = await request.form()
+                to = form_data.get('to')
+                subject = form_data.get('subject')
+                body = form_data.get('body')
+                body_type = form_data.get('body_type', 'html')
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Error parseando form-data: {str(e)}",
+                        "endpoint": "send-email"
+                    }
+                )
+
+        # Validar parámetros
+        if not to or '@' not in to:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Email de destino requerido y debe ser válido"}
+                content={
+                    "success": False,
+                    "error": "Email de destino requerido y debe ser válido",
+                    "endpoint": "send-email"
+                }
             )
 
-        # Validar asunto
-        if not email_data.subject:
+        if not subject:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Asunto del email requerido"}
+                content={
+                    "success": False,
+                    "error": "Asunto del email requerido",
+                    "endpoint": "send-email"
+                }
             )
 
-        # Validar cuerpo
-        if not email_data.body:
+        if not body:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Cuerpo del email requerido"}
+                content={
+                    "success": False,
+                    "error": "Cuerpo del email requerido",
+                    "endpoint": "send-email"
+                }
             )
 
         attachment_path = None
@@ -1109,12 +1151,12 @@ async def send_email_endpoint(
             with open(attachment_path, "wb") as buffer:
                 shutil.copyfileobj(attachment.file, buffer)
 
-        # Enviar email
-        result = send_gmail(
-            to=email_data.to,
-            subject=email_data.subject,
-            body=email_data.body,
-            body_type=email_data.body_type,
+        # Enviar email usando SMTP standalone para evitar problemas OAuth
+        result = send_smtp_standalone(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
             attachment_path=str(attachment_path) if attachment_path else None
         )
 
@@ -1130,19 +1172,36 @@ async def send_email_endpoint(
             response_data = {
                 "success": True,
                 "message": result.get('message'),
-                "message_id": result.get('message_id'),
+                "smtp_server": result.get('smtp_server'),
+                "sender": result.get('sender'),
+                "method": result.get('method'),
+                "endpoint": "send-email",
                 "details": {
-                    "to": email_data.to,
-                    "subject": email_data.subject,
-                    "body_type": email_data.body_type,
-                    "attachment": attachment_filename
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": attachment_filename,
+                    "content_type_detected": content_type
                 }
             }
             return response_data
         else:
+            error_response = {
+                "success": False,
+                "error": result.get('error'),
+                "endpoint": "send-email",
+                "smtp_error_type": result.get('smtp_error'),
+                "details": result.get('details')
+            }
+
+            if result.get('missing_config'):
+                error_response["suggestion"] = "Configura SMTP_USERNAME y SMTP_PASSWORD en .env"
+            elif result.get('smtp_error') == 'authentication':
+                error_response["suggestion"] = "Genera App Password en Gmail y úsala en SMTP_PASSWORD"
+
             return JSONResponse(
                 status_code=500,
-                content=result
+                content=error_response
             )
 
     except Exception as e:
@@ -1150,7 +1209,9 @@ async def send_email_endpoint(
             status_code=500,
             content={
                 "success": False,
-                "error": f"Error inesperado: {str(e)}"
+                "error": f"Error inesperado: {str(e)}",
+                "endpoint": "send-email",
+                "exception_type": type(e).__name__
             }
         )
 
@@ -1189,15 +1250,427 @@ async def send_email_form(
       - attachment: [archivo desde nodo anterior]
     """
 
-    # Crear objeto EmailRequest y reutilizar la lógica existente
-    email_data = EmailRequest(
-        to=to,
-        subject=subject,
-        body=body,
-        body_type=body_type
-    )
+    # Usar el mismo código que send-email-n8n para evitar conflictos con Gmail API
+    try:
+        # Validar parámetros básicos
+        if not to or '@' not in to:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Email de destino requerido y debe ser válido",
+                    "endpoint": "send-email-form"
+                }
+            )
 
-    return await send_email_endpoint(email_data, attachment)
+        if not subject:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Asunto del email requerido",
+                    "endpoint": "send-email-form"
+                }
+            )
+
+        if not body:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Cuerpo del email requerido",
+                    "endpoint": "send-email-form"
+                }
+            )
+
+        attachment_path = None
+        attachment_filename = None
+
+        # Procesar archivo adjunto si se proporciona
+        if attachment:
+            # Crear directorio temporal para adjuntos
+            temp_dir = Path("/tmp/email_attachments")
+            temp_dir.mkdir(exist_ok=True)
+
+            # Guardar archivo temporal
+            attachment_path = temp_dir / attachment.filename
+            attachment_filename = attachment.filename
+
+            with open(attachment_path, "wb") as buffer:
+                shutil.copyfileobj(attachment.file, buffer)
+
+        # Enviar email usando el servicio standalone
+        result = send_smtp_standalone(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
+            attachment_path=str(attachment_path) if attachment_path else None
+        )
+
+        # Limpiar archivo temporal
+        if attachment_path and attachment_path.exists():
+            try:
+                attachment_path.unlink()
+            except:
+                pass  # Ignorar errores de limpieza
+
+        # Preparar respuesta
+        if result.get('success'):
+            response_data = {
+                "success": True,
+                "message": result.get('message'),
+                "smtp_server": result.get('smtp_server'),
+                "sender": result.get('sender'),
+                "method": result.get('method'),
+                "endpoint": "send-email-form",
+                "details": {
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": attachment_filename
+                }
+            }
+            return response_data
+        else:
+            # Agregar información de debug
+            error_response = {
+                "success": False,
+                "error": result.get('error'),
+                "endpoint": "send-email-form",
+                "smtp_error_type": result.get('smtp_error'),
+                "details": result.get('details')
+            }
+
+            # Agregar sugerencias según el tipo de error
+            if result.get('missing_config'):
+                error_response["suggestion"] = "Configura SMTP_USERNAME y SMTP_PASSWORD en .env"
+            elif result.get('smtp_error') == 'authentication':
+                error_response["suggestion"] = "Genera App Password en Gmail y úsala en SMTP_PASSWORD"
+
+            return JSONResponse(
+                status_code=500,
+                content=error_response
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}",
+                "endpoint": "send-email-form",
+                "exception_type": type(e).__name__
+            }
+        )
+
+@app.post("/send-email-smtp/",
+    summary="Enviar email vía SMTP (ideal para n8n)",
+    description="Envía email usando SMTP con Gmail. Configuración simple para n8n HTTP Request nodes",
+    response_description="Confirmación del envío del email vía SMTP"
+)
+async def send_email_smtp_endpoint(
+    to: str = Form(..., description="Email de destino"),
+    subject: str = Form(..., description="Asunto del email"),
+    body: str = Form(..., description="Cuerpo del email en HTML o texto"),
+    body_type: str = Form('html', description="Tipo de cuerpo: 'html' o 'text'"),
+    attachment: Optional[UploadFile] = File(None, description="Archivo adjunto opcional")
+):
+    """
+    Envía un email usando SMTP (Simple Mail Transfer Protocol).
+    Ideal para integración con n8n y configuración más simple que Gmail API.
+
+    **Parámetros de formulario:**
+    - **to**: Email de destino (ej: pepe@gmail.com)
+    - **subject**: Asunto del email
+    - **body**: Cuerpo del email (puede ser HTML o texto plano)
+    - **body_type**: 'html' o 'text' (opcional, por defecto 'html')
+    - **attachment**: Archivo adjunto (opcional)
+
+    **Configuración requerida en .env:**
+    ```
+    SMTP_SERVER=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USERNAME=tu-email@gmail.com
+    SMTP_PASSWORD=tu-app-password
+    SMTP_SENDER_EMAIL=tu-email@gmail.com  # opcional, usa SMTP_USERNAME por defecto
+    ```
+
+    **Para Gmail, necesitas usar App Password:**
+    1. Activar autenticación de 2 factores en tu cuenta Google
+    2. Ir a https://myaccount.google.com/apppasswords
+    3. Generar una contraseña de aplicación
+    4. Usar esa contraseña en SMTP_PASSWORD
+
+    **Configuración en n8n HTTP Request:**
+    - Method: POST
+    - URL: http://tu-servidor:8000/send-email-smtp/
+    - Body Content Type: Form-Data
+    - Parameters:
+      - to: {{ $json.destinatario }}
+      - subject: {{ $json.asunto }}
+      - body: {{ $json.mensaje }}
+      - body_type: html
+      - attachment: [archivo desde nodo anterior si es necesario]
+
+    **Ejemplo con curl:**
+    ```bash
+    curl -X POST "http://localhost:8000/send-email-smtp/" \\
+         -F "to=pepe@gmail.com" \\
+         -F "subject=Prueba desde API" \\
+         -F "body=<h1>Hola!</h1><p>Este es un mensaje de prueba.</p>" \\
+         -F "body_type=html"
+    ```
+
+    **Con adjunto:**
+    ```bash
+    curl -X POST "http://localhost:8000/send-email-smtp/" \\
+         -F "to=pepe@gmail.com" \\
+         -F "subject=Con adjunto" \\
+         -F "body=<p>Email con archivo adjunto</p>" \\
+         -F "attachment=@/ruta/al/archivo.pdf"
+    ```
+    """
+
+    try:
+        # Validar email de destino
+        if not to or '@' not in to:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Email de destino requerido y debe ser válido"}
+            )
+
+        # Validar asunto
+        if not subject:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Asunto del email requerido"}
+            )
+
+        # Validar cuerpo
+        if not body:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Cuerpo del email requerido"}
+            )
+
+        attachment_path = None
+        attachment_filename = None
+
+        # Procesar archivo adjunto si se proporciona
+        if attachment:
+            # Crear directorio temporal para adjuntos
+            temp_dir = Path("/tmp/email_attachments")
+            temp_dir.mkdir(exist_ok=True)
+
+            # Guardar archivo temporal
+            attachment_path = temp_dir / attachment.filename
+            attachment_filename = attachment.filename
+
+            with open(attachment_path, "wb") as buffer:
+                shutil.copyfileobj(attachment.file, buffer)
+
+        # Enviar email vía SMTP
+        result = send_email_smtp(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
+            attachment_path=str(attachment_path) if attachment_path else None
+        )
+
+        # Limpiar archivo temporal
+        if attachment_path and attachment_path.exists():
+            try:
+                attachment_path.unlink()
+            except:
+                pass  # Ignorar errores de limpieza
+
+        # Preparar respuesta
+        if result.get('success'):
+            response_data = {
+                "success": True,
+                "message": result.get('message'),
+                "smtp_server": result.get('smtp_server'),
+                "details": {
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": attachment_filename,
+                    "method": "SMTP"
+                }
+            }
+            return response_data
+        else:
+            return JSONResponse(
+                status_code=500,
+                content=result
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}"
+            }
+        )
+
+@app.post("/send-email-n8n/",
+    summary="Enviar email para n8n (SMTP puro)",
+    description="Endpoint SMTP completamente independiente, ideal para n8n sin conflictos con Gmail API",
+    response_description="Confirmación del envío del email"
+)
+async def send_email_n8n_endpoint(
+    to: str = Form(..., description="Email de destino"),
+    subject: str = Form(..., description="Asunto del email"),
+    body: str = Form(..., description="Cuerpo del email en HTML o texto"),
+    body_type: str = Form('html', description="Tipo de cuerpo: 'html' o 'text'"),
+    attachment: Optional[UploadFile] = File(None, description="Archivo adjunto opcional")
+):
+    """
+    Endpoint SMTP completamente independiente para n8n.
+    No usa Gmail API, solo SMTP puro.
+
+    **Configuración requerida en .env:**
+    ```
+    SMTP_SERVER=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USERNAME=tu-email@gmail.com
+    SMTP_PASSWORD=tu-app-password
+    SMTP_SENDER_EMAIL=tu-email@gmail.com
+    ```
+
+    **Configuración en n8n HTTP Request:**
+    - Method: POST
+    - URL: http://tu-servidor:8000/send-email-n8n/
+    - Body Content Type: Form-Data
+    - Parameters:
+      - to: pepe@gmail.com
+      - subject: Asunto del email
+      - body: Mensaje del email
+      - body_type: html (opcional)
+      - attachment: archivo (opcional)
+
+    **Diferencias con otros endpoints:**
+    - Este endpoint NO usa Gmail API
+    - Es completamente independiente
+    - Ideal para Docker/contenedores
+    - Sin conflictos de autenticación OAuth
+    """
+
+    try:
+        # Validar parámetros básicos
+        if not to or '@' not in to:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Email de destino requerido y debe ser válido",
+                    "endpoint": "send-email-n8n"
+                }
+            )
+
+        if not subject:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Asunto del email requerido",
+                    "endpoint": "send-email-n8n"
+                }
+            )
+
+        if not body:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Cuerpo del email requerido",
+                    "endpoint": "send-email-n8n"
+                }
+            )
+
+        attachment_path = None
+        attachment_filename = None
+
+        # Procesar archivo adjunto si se proporciona
+        if attachment:
+            # Crear directorio temporal para adjuntos
+            temp_dir = Path("/tmp/email_attachments")
+            temp_dir.mkdir(exist_ok=True)
+
+            # Guardar archivo temporal
+            attachment_path = temp_dir / attachment.filename
+            attachment_filename = attachment.filename
+
+            with open(attachment_path, "wb") as buffer:
+                shutil.copyfileobj(attachment.file, buffer)
+
+        # Enviar email usando el servicio standalone
+        result = send_smtp_standalone(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
+            attachment_path=str(attachment_path) if attachment_path else None
+        )
+
+        # Limpiar archivo temporal
+        if attachment_path and attachment_path.exists():
+            try:
+                attachment_path.unlink()
+            except:
+                pass  # Ignorar errores de limpieza
+
+        # Preparar respuesta
+        if result.get('success'):
+            response_data = {
+                "success": True,
+                "message": result.get('message'),
+                "smtp_server": result.get('smtp_server'),
+                "sender": result.get('sender'),
+                "method": result.get('method'),
+                "endpoint": "send-email-n8n",
+                "details": {
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": attachment_filename
+                }
+            }
+            return response_data
+        else:
+            # Agregar información de debug
+            error_response = {
+                "success": False,
+                "error": result.get('error'),
+                "endpoint": "send-email-n8n",
+                "smtp_error_type": result.get('smtp_error'),
+                "details": result.get('details')
+            }
+
+            # Agregar sugerencias según el tipo de error
+            if result.get('missing_config'):
+                error_response["suggestion"] = "Configura SMTP_USERNAME y SMTP_PASSWORD en .env"
+            elif result.get('smtp_error') == 'authentication':
+                error_response["suggestion"] = "Genera App Password en Gmail y úsala en SMTP_PASSWORD"
+
+            return JSONResponse(
+                status_code=500,
+                content=error_response
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}",
+                "endpoint": "send-email-n8n",
+                "exception_type": type(e).__name__
+            }
+        )
 
 @app.get("/storage-info/",
     summary="Información de almacenamiento",

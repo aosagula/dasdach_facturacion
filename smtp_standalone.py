@@ -1,3 +1,7 @@
+"""
+Servicio SMTP standalone - completamente independiente de Gmail API
+"""
+
 import os
 import smtplib
 import ssl
@@ -5,16 +9,16 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
-from typing import Optional
 import mimetypes
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
 load_dotenv()
 
-class SMTPEmailService:
-    """Servicio para envío de emails vía SMTP (simple, ideal para n8n)"""
+class StandaloneSMTP:
+    """Servicio SMTP completamente independiente"""
 
     def __init__(self):
         # Configuración SMTP desde variables de entorno
@@ -68,7 +72,8 @@ class SMTPEmailService:
             if not self.smtp_username or not self.smtp_password:
                 return {
                     'success': False,
-                    'error': 'Configuración SMTP incompleta. Verifica SMTP_USERNAME y SMTP_PASSWORD en .env'
+                    'error': 'Configuración SMTP incompleta. Verifica SMTP_USERNAME y SMTP_PASSWORD en .env',
+                    'missing_config': True
                 }
 
             # Crear mensaje
@@ -88,33 +93,43 @@ class SMTPEmailService:
             return {
                 'success': True,
                 'message': f'Email enviado exitosamente vía SMTP a {to}',
-                'smtp_server': self.smtp_server
+                'smtp_server': self.smtp_server,
+                'sender': self.sender_email,
+                'method': 'SMTP_STANDALONE'
             }
 
-        except smtplib.SMTPAuthenticationError:
+        except smtplib.SMTPAuthenticationError as error:
             return {
                 'success': False,
-                'error': 'Error de autenticación SMTP. Verifica las credenciales en .env'
+                'error': 'Error de autenticación SMTP. Verifica las credenciales en .env',
+                'smtp_error': 'authentication',
+                'details': str(error)
             }
-        except smtplib.SMTPRecipientsRefused:
+        except smtplib.SMTPRecipientsRefused as error:
             return {
                 'success': False,
-                'error': f'Email de destino rechazado: {to}'
+                'error': f'Email de destino rechazado: {to}',
+                'smtp_error': 'recipient_refused',
+                'details': str(error)
             }
         except smtplib.SMTPException as error:
             return {
                 'success': False,
-                'error': f'Error SMTP: {error}'
+                'error': f'Error SMTP: {error}',
+                'smtp_error': 'smtp_exception',
+                'details': str(error)
             }
         except Exception as error:
             return {
                 'success': False,
-                'error': f'Error enviando email: {error}'
+                'error': f'Error enviando email: {error}',
+                'smtp_error': 'general_error',
+                'details': str(error)
             }
 
-# Instancia global del servicio SMTP
-smtp_service = SMTPEmailService()
+# Instancia global
+smtp_standalone = StandaloneSMTP()
 
-def send_email_smtp(to: str, subject: str, body: str, body_type: str = 'html', attachment_path: Optional[str] = None):
-    """Función helper para enviar emails vía SMTP"""
-    return smtp_service.send_email(to, subject, body, body_type, attachment_path)
+def send_smtp_standalone(to: str, subject: str, body: str, body_type: str = 'html', attachment_path: Optional[str] = None):
+    """Función helper para enviar emails vía SMTP standalone"""
+    return smtp_standalone.send_email(to, subject, body, body_type, attachment_path)
