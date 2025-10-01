@@ -1684,14 +1684,7 @@ async def send_email_n8n_endpoint(
     summary="Endpoint híbrido para n8n (GET y POST)",
     description="Endpoint que maneja tanto GET como POST para n8n"
 )
-async def send_email_n8n_hybrid(
-    request: Request,
-    to: str = Form(None),
-    subject: str = Form(None),
-    body: str = Form(None),
-    body_type: str = Form('html'),
-    attachment: Optional[UploadFile] = File(None)
-):
+async def send_email_n8n_hybrid(request: Request):
     """
     Endpoint híbrido que maneja GET y POST.
     Útil cuando n8n hace redirects que cambian el método.
@@ -1701,24 +1694,66 @@ async def send_email_n8n_hybrid(
     print(f"[DEBUG] /send-email-n8n-hybrid/ {method} recibido")
     print(f"[DEBUG] URL: {request.url}")
 
-    if method == "GET":
-        # Obtener parámetros desde query params
-        query_params = dict(request.query_params)
-        to = query_params.get('to')
-        subject = query_params.get('subject')
-        body = query_params.get('body')
-        body_type = query_params.get('body_type', 'html')
+    # Variables para los parámetros
+    to = None
+    subject = None
+    body = None
+    body_type = 'html'
+    attachment = None
 
-        print(f"[DEBUG] GET params: {query_params}")
+    try:
+        if method == "GET":
+            # Obtener parámetros desde query params
+            query_params = dict(request.query_params)
+            to = query_params.get('to')
+            subject = query_params.get('subject')
+            body = query_params.get('body')
+            body_type = query_params.get('body_type', 'html')
 
-        if not to or not subject or not body:
-            return {
-                "error": "Parámetros faltantes en GET",
-                "message": "Para GET usa: /send-email-n8n-hybrid/?to=email&subject=asunto&body=mensaje",
-                "received_params": query_params,
-                "required_params": ["to", "subject", "body"],
-                "optional_params": ["body_type"]
+            print(f"[DEBUG] GET params: {query_params}")
+
+            if not to or not subject or not body:
+                return {
+                    "error": "Parámetros faltantes en GET",
+                    "message": "Para GET usa: /send-email-n8n-hybrid/?to=email&subject=asunto&body=mensaje",
+                    "received_params": query_params,
+                    "required_params": ["to", "subject", "body"],
+                    "optional_params": ["body_type"]
+                }
+
+        elif method == "POST":
+            # Obtener parámetros desde form data
+            try:
+                form_data = await request.form()
+                to = form_data.get('to')
+                subject = form_data.get('subject')
+                body = form_data.get('body')
+                body_type = form_data.get('body_type', 'html')
+                attachment = form_data.get('attachment')
+
+                print(f"[DEBUG] POST form data keys: {list(form_data.keys())}")
+
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Error procesando form data: {str(e)}",
+                        "method": method,
+                        "endpoint": "send-email-n8n-hybrid"
+                    }
+                )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": f"Error procesando request: {str(e)}",
+                "method": method,
+                "endpoint": "send-email-n8n-hybrid"
             }
+        )
 
     # Validar parámetros
     if not to or '@' not in to:
@@ -1759,7 +1794,7 @@ async def send_email_n8n_hybrid(
         attachment_path = None
         attachment_filename = None
 
-        if method == "POST" and attachment:
+        if method == "POST" and attachment and hasattr(attachment, 'filename'):
             temp_dir = Path("/tmp/email_attachments")
             temp_dir.mkdir(exist_ok=True)
             attachment_path = temp_dir / attachment.filename
@@ -1819,6 +1854,106 @@ async def send_email_n8n_hybrid(
             }
         )
 
+@app.get("/send-email-get/",
+    summary="Enviar email vía GET (para n8n con redirects)",
+    description="Endpoint GET puro para n8n cuando hay problemas con POST/redirects"
+)
+async def send_email_get(
+    request: Request,
+    to: str = Query(..., description="Email de destino"),
+    subject: str = Query(..., description="Asunto del email"),
+    body: str = Query(..., description="Cuerpo del email"),
+    body_type: str = Query('html', description="Tipo de cuerpo: html o text")
+):
+    """
+    Endpoint GET puro para enviar emails.
+    Ideal para n8n cuando hay problemas con POST o redirects.
+
+    Uso:
+    GET /send-email-get/?to=email@destino.com&subject=Asunto&body=Mensaje
+    """
+
+    print(f"[DEBUG] /send-email-get/ GET recibido")
+    print(f"[DEBUG] URL: {request.url}")
+    print(f"[DEBUG] Parámetros: to={to}, subject={subject}")
+
+    try:
+        # Validar parámetros
+        if not to or '@' not in to:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Email de destino requerido y debe ser válido",
+                    "endpoint": "send-email-get"
+                }
+            )
+
+        if not subject:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Asunto del email requerido",
+                    "endpoint": "send-email-get"
+                }
+            )
+
+        if not body:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Cuerpo del email requerido",
+                    "endpoint": "send-email-get"
+                }
+            )
+
+        # Enviar email (sin adjuntos en GET)
+        result = send_smtp_standalone(
+            to=to,
+            subject=subject,
+            body=body,
+            body_type=body_type,
+            attachment_path=None
+        )
+
+        # Preparar respuesta
+        if result.get('success'):
+            return {
+                "success": True,
+                "message": result.get('message'),
+                "method": "GET",
+                "endpoint": "send-email-get",
+                "details": {
+                    "to": to,
+                    "subject": subject,
+                    "body_type": body_type,
+                    "attachment": None
+                }
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": result.get('error'),
+                    "method": "GET",
+                    "endpoint": "send-email-get"
+                }
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Error inesperado: {str(e)}",
+                "method": "GET",
+                "endpoint": "send-email-get"
+            }
+        )
+
 @app.get("/send-email-n8n/",
     summary="Endpoint GET para send-email-n8n (redirect info)",
     description="Endpoint informativo para cuando se accede vía GET en lugar de POST"
@@ -1834,7 +1969,10 @@ async def send_email_n8n_get():
         "endpoint": "/send-email-n8n/",
         "method_required": "POST",
         "content_type": "multipart/form-data",
-        "alternative_endpoint": "/send-email-n8n-hybrid/ (acepta GET y POST)",
+        "alternative_endpoints": {
+            "hybrid": "/send-email-n8n-hybrid/ (acepta GET y POST)",
+            "get_only": "/send-email-get/ (solo GET, más simple)"
+        },
         "parameters": {
             "to": "email@destino.com",
             "subject": "Asunto del email",

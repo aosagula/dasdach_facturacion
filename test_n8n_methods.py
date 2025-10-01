@@ -90,28 +90,35 @@ def main():
     # Lista de pruebas
     tests = [
         {
-            "name": "GET /send-email-n8n/ (debería fallar con info)",
+            "name": "GET /send-email-n8n/ (info endpoint)",
             "method": "GET",
             "url": f"{base_url}/send-email-n8n/",
             "params": None,
             "data": None
         },
         {
-            "name": "POST /send-email-n8n/ (debería funcionar)",
+            "name": "POST /send-email-n8n/ (endpoint original)",
             "method": "POST",
             "url": f"{base_url}/send-email-n8n/",
             "params": None,
             "data": form_data
         },
         {
-            "name": "GET /send-email-n8n-hybrid/ (debería funcionar)",
+            "name": "GET /send-email-get/ (endpoint GET puro)",
+            "method": "GET",
+            "url": f"{base_url}/send-email-get/",
+            "params": query_params,
+            "data": None
+        },
+        {
+            "name": "GET /send-email-n8n-hybrid/ (endpoint híbrido)",
             "method": "GET",
             "url": f"{base_url}/send-email-n8n-hybrid/",
             "params": query_params,
             "data": None
         },
         {
-            "name": "POST /send-email-n8n-hybrid/ (debería funcionar)",
+            "name": "POST /send-email-n8n-hybrid/ (endpoint híbrido)",
             "method": "POST",
             "url": f"{base_url}/send-email-n8n-hybrid/",
             "params": None,
@@ -149,10 +156,18 @@ def main():
     print(f"\n📈 Resultado: {exitosos}/{len(resultados)} pruebas exitosas")
 
     print("\n💡 RECOMENDACIONES PARA N8N:")
-    print("1. Usa /send-email-n8n-hybrid/ si tienes problemas con redirects")
-    print("2. Configura método POST en n8n HTTP Request")
-    print("3. Body Content Type: Form-Data")
-    print("4. Si ves redirects GET, el endpoint híbrido los maneja")
+    print("1. 🥇 MEJOR OPCIÓN: /send-email-get/ (GET puro, sin problemas)")
+    print("2. 🥈 ALTERNATIVA: /send-email-n8n-hybrid/ (si necesitas POST)")
+    print("3. 🥉 ORIGINAL: /send-email-n8n/ (solo POST)")
+    print()
+    print("📝 CONFIGURACIÓN N8N RECOMENDADA:")
+    print("   URL: https://tu-app.railway.app/send-email-get/")
+    print("   Method: GET")
+    print("   Query Parameters:")
+    print("     - to: {{$json.email}}")
+    print("     - subject: {{$json.subject}}")
+    print("     - body: {{$json.message}}")
+    print("     - body_type: html")
 
     print("\n" + "=" * 60)
 
