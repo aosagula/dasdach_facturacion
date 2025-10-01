@@ -631,55 +631,62 @@ async def run_script_endpoint(script_name: str, parameters: dict = None):
 async def run_python_script(script_path: str, args: list = None, env_vars: dict = None, timeout: int = 300):
     """
     Ejecuta un script Python con soporte completo para argumentos y variables de entorno.
-    
+
     Args:
         script_path: Ruta completa al script Python
         args: Lista de argumentos para pasar al script
         env_vars: Diccionario de variables de entorno adicionales
         timeout: Timeout máximo de ejecución en segundos
-    
+
     Returns:
         dict: Resultado con stdout, stderr, returncode y comando ejecutado
     """
+    loop = asyncio.get_running_loop()
+
     env = os.environ.copy()
     env['PLAYWRIGHT_BROWSERS_PATH'] = '/ms-playwright'
-    
+
     # Agregar variables de entorno personalizadas (nuevo)
     if env_vars:
         env.update(env_vars)
-    
+
     # Construir comando (mejorado)
     command = ["python", script_path]
     if args:
         command.extend([str(arg) for arg in args])  # Convertir todos los args a string
-    
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout
-        )
-        
-        # Respuesta mejorada con información del comando
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
-            "command": " ".join(command)  # nuevo: mostrar comando ejecutado
-        }
-        
-    except subprocess.TimeoutExpired:
-        return {
-            "error": f"Script timeout ({timeout}s)", 
-            "command": " ".join(command)
-        }
-    except Exception as e:
-        return {
-            "error": str(e), 
-            "command": " ".join(command)
-        }
+
+    def _run():
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=timeout
+            )
+
+            # Respuesta mejorada con información del comando
+            return {
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+                "command": " ".join(command)  # nuevo: mostrar comando ejecutado
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "error": f"Script timeout ({timeout}s)",
+                "command": " ".join(command)
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "command": " ".join(command)
+            }
+
+    return await loop.run_in_executor(None, _run)
+
+
 
 @app.get("/scripts/")
 async def list_scripts():
