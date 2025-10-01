@@ -1,34 +1,8 @@
 #!/bin/bash
 
-# Función para leer variables del .env
-get_env_var() {
-    # Extract first match for key and strip Windows carriage returns
-    grep -m1 "^$1=" .env | sed 's/^[^=]*=//' | tr -d '\r'
-}
-
-# Cargar variables PostgreSQL del archivo .env
-if [ -f .env ]; then
-    PGHOST=$(get_env_var "PGHOST")
-    PGPORT=$(get_env_var "PGPORT")
-    PGUSER=$(get_env_var "PGUSER")
-    PGDATABASE=$(get_env_var "PGDATABASE")
-
-    # Exportar las variables
-    export PGHOST PGPORT PGDATABASE PGUSER 
-
-    echo "Variables PostgreSQL cargadas desde .env:"
-    echo "PGHOST: $PGHOST"
-    echo "PGPORT: $PGPORT"
-    echo "PGUSER: $PGUSER"
-    
-else
-    echo "Archivo .env no encontrado"
-    exit 1
-fi
 # Esperar a que PostgreSQL esté disponible (si usas Railway PostgreSQL)
 echo "Esperando conexión a PostgreSQL..."
-
-while ! pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"; do
+while ! pg_isready -h $PGHOST -p $PGPORT -U $PGUSER; do
   echo "PostgreSQL no está listo - esperando..."
   sleep 2
 done
