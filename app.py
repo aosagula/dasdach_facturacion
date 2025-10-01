@@ -1672,6 +1672,71 @@ async def send_email_n8n_endpoint(
             }
         )
 
+@app.get("/smtp-config/",
+    summary="Verificar configuración SMTP",
+    description="Endpoint para verificar que las variables SMTP estén configuradas correctamente",
+    response_description="Estado de configuración SMTP"
+)
+async def check_smtp_config():
+    """
+    Verifica que las variables de entorno SMTP estén configuradas.
+    Útil para debugging en Railway/producción.
+    """
+
+    # Variables SMTP requeridas
+    smtp_vars = {
+        'SMTP_SERVER': os.getenv('SMTP_SERVER'),
+        'SMTP_PORT': os.getenv('SMTP_PORT'),
+        'SMTP_USERNAME': os.getenv('SMTP_USERNAME'),
+        'SMTP_PASSWORD': os.getenv('SMTP_PASSWORD'),
+        'SMTP_SENDER_EMAIL': os.getenv('SMTP_SENDER_EMAIL')
+    }
+
+    config_status = {}
+    missing_vars = []
+
+    for var_name, var_value in smtp_vars.items():
+        if var_value:
+            if var_name == 'SMTP_PASSWORD':
+                # No mostrar la contraseña, solo confirmar que existe
+                config_status[var_name] = "✅ CONFIGURADA (oculta por seguridad)"
+            else:
+                config_status[var_name] = f"✅ {var_value}"
+        else:
+            config_status[var_name] = "❌ NO CONFIGURADA"
+            missing_vars.append(var_name)
+
+    # Detectar entorno
+    environment = "Railway" if os.getenv('RAILWAY_ENVIRONMENT') else "Local"
+
+    response = {
+        "environment": environment,
+        "smtp_config": config_status,
+        "all_configured": len(missing_vars) == 0,
+        "missing_variables": missing_vars
+    }
+
+    # Agregar información específica de Railway
+    if os.getenv('RAILWAY_ENVIRONMENT'):
+        response["railway_environment"] = os.getenv('RAILWAY_ENVIRONMENT')
+        response["railway_service"] = os.getenv('RAILWAY_SERVICE_NAME', 'N/A')
+
+    # Agregar sugerencias si faltan variables
+    if missing_vars:
+        response["suggestions"] = {
+            "message": "Configura las variables faltantes en Railway > Variables",
+            "required_vars": {
+                "SMTP_SERVER": "smtp.gmail.com",
+                "SMTP_PORT": "587",
+                "SMTP_USERNAME": "tu-email@gmail.com",
+                "SMTP_PASSWORD": "tu-app-password-de-gmail",
+                "SMTP_SENDER_EMAIL": "tu-email@gmail.com"
+            },
+            "gmail_app_password_url": "https://myaccount.google.com/apppasswords"
+        }
+
+    return response
+
 @app.get("/storage-info/",
     summary="Información de almacenamiento",
     description="Obtiene estadísticas detalladas sobre el uso de almacenamiento por tipo de archivo",

@@ -10,8 +10,12 @@ import mimetypes
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno (solo en desarrollo local)
+# En Railway/producción las variables se configuran directamente en la plataforma
+try:
+    load_dotenv()
+except:
+    pass  # En Railway no hay archivo .env, usar variables del sistema
 
 class SMTPEmailService:
     """Servicio para envío de emails vía SMTP (simple, ideal para n8n)"""

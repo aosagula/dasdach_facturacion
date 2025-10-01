@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno (solo en desarrollo local)
+# En Railway/producción las variables se configuran directamente en la plataforma
+try:
+    load_dotenv()
+except:
+    pass  # En Railway no hay archivo .env, usar variables del sistema
 
 class StandaloneSMTP:
     """Servicio SMTP completamente independiente"""
