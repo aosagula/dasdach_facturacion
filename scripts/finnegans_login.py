@@ -520,6 +520,7 @@ def search_and_make_invoice_dasdach(page, frame, remito) -> None:
 def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
+        time.sleep(2)
         if not navigate_to_section(page, "Facturación"):
             raise Exception("Failed to navigate to Facturación section")
 
@@ -704,12 +705,13 @@ def process_company(company: str) -> None:
                 print_with_time("Login failed, skipping additional operations")
                 remitos_fallidos = len(resumen)
                 remitos_fallidos_lista = [{'comprobante': r['comprobante'], 'error': 'Login failed'} for r in resumen]
+            
     else:
         print_with_time("No remitos found to process")
 
     fin = datetime.now()
     tiempo_transcurrido = fin - inicio
-
+    print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, fin - inicio)
 def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, tiempo_transcurrido):
     print_with_time("=" * 50)
     print_with_time("REPORTE FINAL DE PROCESAMIENTO")
