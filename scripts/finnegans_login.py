@@ -95,6 +95,9 @@ def resumir_transacciones(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "provincia_destino": provincia_destino,
             "identificacion_tributaria": identificacion_tributaria,
             "nro_de_identificacion": row.get("NRODEIDENTIFICACION"),
+            "importe": row.get("IMPORTE"),
+            "importe_gravado": row.get("GRAVADO"),
+            "importe_no_gravado": row.get("NO GRAVADO"),
         }
 
     # devolvemos como lista (orden por comprobante asc y luego por trx_id para estabilidad)
@@ -523,7 +526,7 @@ def ejecutar_factura(page, remito, company) -> None:
         time.sleep(2)
         if not navigate_to_section(page, "Facturación"):
             raise Exception("Failed to navigate to Facturación section")
-
+        time.sleep(2)
         frame = create_new_invoice(page, remito)
         if not frame:
             raise Exception("Failed to create new invoice frame")
@@ -565,7 +568,11 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
         try:
             print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']}")
             show_comprobante(page, f"Procesando remito: {remito['comprobante']} ({i}/{len(resumen)})")
-            ejecutar_factura(page, remito, company)
+            if remito['importe'] in (0, None, ''):
+                print_with_time(f"Remito {remito['comprobante']} tiene monto 0, no se procesa")
+                #continue
+            else:
+                ejecutar_factura(page, remito, company)
             remitos_exitosos += 1
             remitos_exitosos_lista.append(remito['comprobante'])
             print_with_time(f"✓ Remito {remito['comprobante']} procesado exitosamente")
@@ -685,7 +692,14 @@ def process_company(company: str) -> None:
     remitos_fallidos = 0
     remitos_exitosos_lista = []
     remitos_fallidos_lista = []
-
+    
+    #TODO: listar remitos a procesar
+    print_with_time("Remitos to be processed:")
+    for remito in resumen:
+        print_with_time(f" - {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']}")
+    
+     # Solo proceder si hay remitos para procesar
+    
     if len(resumen) > 0 and resumen is not None:
         with sync_playwright() as playwright:
             browser, context, page = run_finnegans_login(playwright)
@@ -761,8 +775,8 @@ def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, re
     
 def main():
     
-    process_company("AVIANCA")
-    #process_company("Das Dach")
+    #process_company("AVIANCA")
+    process_company("Das Dach")
     # Reporte final
 
 
