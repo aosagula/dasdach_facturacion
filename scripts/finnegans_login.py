@@ -6,6 +6,7 @@ import re
 import sys
 import os
 import requests
+import psycopg2
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -51,57 +52,75 @@ def _coalesce(d: Dict[str, Any], *keys: str) -> Optional[Any]:
 
 def resumir_transacciones(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Agrupa por COMPROBANTE (y usa TRANSACCIONID como ref secundaria si hiciera falta)
-    y devuelve: comprobante, docnroint, fecha_comprobante, total_bruto, total_conceptos,
-    total, cliente, condicion_pago, provincia_destino, identificacion_tributaria, nro_de_identificacion.
+    Agrupa por COMPROBANTE y suma los importes de todos los ítems de ese comprobante.
+    Devuelve por cada comprobante: comprobante, docnroint, fecha_comprobante, total_bruto,
+    total_conceptos, total, cliente, condicion_pago, provincia_destino, identificacion_tributaria,
+    nro_de_identificacion, importe (suma de "IMPORTE"), importe_gravado (suma de "GRAVADO"),
+    e importe_no_gravado (suma de "NO GRAVADO").
     """
-    resumen_por_clave: Dict[tuple, Dict[str, Any]] = {}
+
+    def _to_float(value: Any) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            s = value.strip()
+            # intento directo (p.ej. "1234.56")
+            try:
+                return float(s)
+            except Exception:
+                # intento con formato local (p.ej. "1.234,56")
+                s2 = s.replace(".", "").replace(",", ".")
+                try:
+                    return float(s2)
+                except Exception:
+                    return 0.0
+        return 0.0
+
+    resumen_por_comp: Dict[str, Dict[str, Any]] = {}
 
     for row in items:
         comp = row.get("COMPROBANTE")
-        trx_id = row.get("TRANSACCIONID")  # por si hubiera duplicados de comprobante en otra op.
         if not comp:
-            # si faltara, saltamos este registro
-            continue
-
-        clave = (comp, trx_id)
-
-        if clave in resumen_por_clave:
-            # ya registrado, no necesitamos sobreescribir (son iguales a nivel cabecera)
             continue
 
         identificacion_tributaria = _coalesce(
             row,
-            # variantes que suelen venir con typos
             "INDENTIFICACIONTRIBUTARIA",
-            "IDENTIFICACIONTRIBUTARIA"
+            "IDENTIFICACIONTRIBUTARIA",
         )
 
         provincia_destino = _coalesce(
             row,
             "PROVINCIADESTINO",       # a nivel cabecera
-            "PROVINCIADESTINOITEM"    # a nivel ítem
+            "PROVINCIADESTINOITEM",   # a nivel ítem
         )
 
-        resumen_por_clave[clave] = {
-            "comprobante": comp,
-            "docnroint": row.get("DOCNROINT"),
-            "fecha_comprobante": row.get("FECHACOMPROBANTE"),
-            "total_bruto": row.get("TOTALBRUTO"),
-            "total_conceptos": row.get("TOTALCONCEPTOS"),
-            "total": row.get("TOTAL"),
-            "cliente": row.get("CLIENTE"),
-            "condicion_pago": row.get("CONDICIONPAGO"),
-            "provincia_destino": provincia_destino,
-            "identificacion_tributaria": identificacion_tributaria,
-            "nro_de_identificacion": row.get("NRODEIDENTIFICACION"),
-            "importe": row.get("IMPORTE"),
-            "importe_gravado": row.get("GRAVADO"),
-            "importe_no_gravado": row.get("NO GRAVADO"),
-        }
+        if comp not in resumen_por_comp:
+            resumen_por_comp[comp] = {
+                "comprobante": comp,
+                "docnroint": row.get("DOCNROINT"),
+                "fecha_comprobante": row.get("FECHACOMPROBANTE"),
+                "total_bruto": row.get("TOTALBRUTO"),
+                "total_conceptos": row.get("TOTALCONCEPTOS"),
+                "total": row.get("TOTAL"),
+                "cliente": row.get("CLIENTE"),
+                "condicion_pago": row.get("CONDICIONPAGO"),
+                "provincia_destino": provincia_destino,
+                "identificacion_tributaria": identificacion_tributaria,
+                "nro_de_identificacion": row.get("NRODEIDENTIFICACION"),
+                # acumuladores
+                "importe": 0.0,
+                "importe_gravado": 0.0,
+                "importe_no_gravado": 0.0,
+            }
 
-    # devolvemos como lista (orden por comprobante asc y luego por trx_id para estabilidad)
-    return [resumen_por_clave[k] for k in sorted(resumen_por_clave.keys(), key=lambda x: (str(x[0]), x[1] or 0))]
+        # acumular importes por comprobante
+        resumen_por_comp[comp]["importe"] += _to_float(row.get("IMPORTE"))
+        resumen_por_comp[comp]["importe_gravado"] += _to_float(row.get("GRAVADO"))
+        resumen_por_comp[comp]["importe_no_gravado"] += _to_float(row.get("NO GRAVADO"))
+
+    # devolver como lista ordenada por comprobante
+    return [resumen_por_comp[k] for k in sorted(resumen_por_comp.keys(), key=lambda x: str(x))]
 
 
 def get_remitos_pendientes(company: str) -> list:
@@ -140,10 +159,102 @@ def save_screenshot(image_bytes, filename):
         
         print_with_time(f"Screenshot guardado en: {full_path}")
         return str(full_path)
+
     
     except Exception as e:
         print_with_time(f"Error guardando screenshot: {e}")
         return None
+
+# ==================== PostgreSQL logging de facturas ====================
+# Config DB igual a otros módulos
+DB_CONFIG = {
+    'host': os.getenv('PGHOST', 'localhost'),
+    'port': os.getenv('PGPORT', '5432'),
+    'database': os.getenv('PGDATABASE', 'railway'),
+    'user': os.getenv('PGUSER', 'postgres'),
+    'password': os.getenv('PGPASSWORD', '')
+}
+
+_FACT_TABLE_INITED = False
+_FACT_LOCK = threading.Lock()
+
+def _ensure_facturas_table():
+    global _FACT_TABLE_INITED
+    if _FACT_TABLE_INITED:
+        return
+    with _FACT_LOCK:
+        if _FACT_TABLE_INITED:
+            return
+        conn = None
+        try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS facturas_generadas (
+                    id SERIAL PRIMARY KEY,
+                    fecha_hora TIMESTAMP NOT NULL,
+                    comprobante VARCHAR(100) NOT NULL,
+                    cuit VARCHAR(20),
+                    empresa VARCHAR(200),
+                    provincia_destino VARCHAR(100),
+                    alicuota NUMERIC(10,4),
+                    numero_factura VARCHAR(100),
+                    estado VARCHAR(30) NOT NULL DEFAULT 'Generado',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_estado ON facturas_generadas(estado)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_comprobante ON facturas_generadas(comprobante)")
+            conn.commit()
+            _FACT_TABLE_INITED = True
+            print_with_time("Tabla facturas_generadas creada/verificada")
+        except Exception as e:
+            print_with_time(f"Error creando/verificando tabla facturas_generadas: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+def guardar_factura_generada(
+    fecha_hora: datetime,
+    comprobante: str,
+    cuit: str | None,
+    empresa: str | None,
+    provincia_destino: str | None,
+    alicuota: float | None,
+    numero_factura: str | None,
+    estado: str = 'Generado'
+):
+    _ensure_facturas_table()
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO facturas_generadas
+            (fecha_hora, comprobante, cuit, empresa, provincia_destino, alicuota, numero_factura, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                fecha_hora,
+                comprobante,
+                cuit,
+                empresa,
+                provincia_destino,
+                alicuota,
+                numero_factura,
+                estado,
+            )
+        )
+        conn.commit()
+        print_with_time("Factura registrada en PostgreSQL con estado Generado")
+    except Exception as e:
+        print_with_time(f"Error registrando factura en PostgreSQL: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def get_video_path():
     """Obtener la ruta para guardar videos"""
@@ -361,7 +472,7 @@ def create_new_invoice(page, remito):
     time.sleep(1)
     return frame
 
-def search_and_make_invoice_avianca(page, frame, remito) -> None:
+def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
     
     print_with_time("Exploring navigation to add remito details...")
         
@@ -405,7 +516,44 @@ def search_and_make_invoice_avianca(page, frame, remito) -> None:
             print_with_time("Guardando la factura")
             boton_guardar.nth(1).click()
             time.sleep(5)
-            
+
+            # Intentar leer el nro de factura asignado
+            nro_factura = None
+            try:
+                widget_doc = frame.locator('div.widget[name="wdg_NumeroDocumento"]')
+                if widget_doc.is_visible() == True:
+                    nro_factura = frame.locator('div.widget[name="wdg_NumeroDocumento"] >> input[type="textbox"]').input_value()
+                    print_with_time(f"Nro de factura asignado: {nro_factura}")
+            except Exception:
+                pass
+
+            # Registrar en PostgreSQL con estado Generado
+            try:
+                cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
+                provincia = remito.get('provincia_destino')
+                alicuota = None
+                if cuit:
+                    info = get_alicuotas([cuit])
+                    if info.get('encontrados', 0) > 0:
+                        alicuota = info.get('resultados', [{}])[0].get('alicuota')
+                if alicuota is None:
+                    if provincia == 'Buenos Aires':
+                        alicuota = 8.0
+                    else:
+                        alicuota = 0.0
+                guardar_factura_generada(
+                    datetime.now(),
+                    remito.get('comprobante'),
+                    cuit,
+                    company,
+                    provincia,
+                    float(alicuota) if alicuota is not None else None,
+                    nro_factura,
+                    'Generado'
+                )
+            except Exception as e:
+                print_with_time(f"No se pudo registrar la factura: {e}")
+
             boton_cerrar = frame.locator("#close")
             boton_cerrar.nth(1).click()
             time.sleep(1)
@@ -436,7 +584,7 @@ def get_alicuotas(cuits: List[str]) -> Dict[str, Any]:
     else:
         print_with_time(f"Error al obtener las alícuotas: {response.status_code} - {response.text}")
         return {}
-def search_and_make_invoice_dasdach(page, frame, remito) -> None:
+def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
     
     print_with_time("Exploring navigation to add remito details...")
         
@@ -475,37 +623,85 @@ def search_and_make_invoice_dasdach(page, frame, remito) -> None:
             
             print_with_time("Ingresando al detalle de la factura")
             
-            #TODO: agregar llamada al endpoint de alicuotas
-            # endpoint : curl -X 'GET' \
-            #                   'http://localhost:8000/alicuotas/?cuits=20223012931' \
-            #                   -H 'accept: application/json'
-            # resultado OK :
-            # {
-            #    "resultados": [
-            #        {
-            #        "cuit": "20223012931",
-            #        "alicuota": null,
-            #        "vigencia_desde": null,
-            #        "vigencia_hasta": null,
-            #        "fecha_emision": null,
-            #        "encontrado": false
-            #        }
-            #    ],
-            #    "total_consultados": 1,
-            #    "encontrados": 0,
-            #    "no_encontrados": 1
-            #}
-            
-            cuit = re.sub(r'\D', '', remito['nro_de_identificacion'])
-            alicuotas_info = get_alicuotas([cuit])
             
             
+            if remito['identificacion_tributaria'] == 'CUIT':
+                cuit = re.sub(r'\D', '', remito['nro_de_identificacion'])
+                alicuotas_info = get_alicuotas([cuit])
+                
+                encontrado = alicuotas_info.get('encontrados', 0)
+                no_encontrado = alicuotas_info.get('no_encontrados', 0)
+                
+                if encontrado > 0:
+                    alicuotas_a_cobrar = alicuotas_info.get('resultados')[0]['alicuota']
+                else:
+                    if remito['provincia_destino'] == 'Buenos Aires':
+                        alicuotas_a_cobrar = 8.0  # default si no se encuentra
+                    else:
+                        alicuotas_a_cobrar = 0.0  # default si no se encuentra
+                
+                percepcion_valor = remito['importe_no_gravado'] * alicuotas_a_cobrar / 100
+                
+                print_with_time(f"CUIT: {cuit} - Alicuota a cobrar: {alicuotas_a_cobrar}% - Percepcion valor: {percepcion_valor:.2f} - Provincia: {remito['provincia_destino']}")
+                if percepcion_valor > 0:
+                    agregar_percepcion( frame, percepcion_valor)
+            else:
+                print_with_time(f"Identificacion tributaria no es CUIT, no se agrega percepcion")
+                alicuotas_a_cobrar = 0.0
+                percepcion_valor = 0.0
+                
+            # Flag Obtener CEA Automatico al Guardar
+            widget = frame.locator('div.widget[name="wdg_CAEAutomatico"]')
+            if widget.is_visible() == True:
+                checkbox = widget.locator('input[type="checkbox"]')
+                checkbox.check()
+                time.sleep(3)
             
+            # TODO: Guardar Documento
             # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
-            # boton_guardar = frame.locator("#_onSave")
-            # print_with_time("Guardando la factura")
+            boton_guardar = frame.locator("#_onSave")
+            print_with_time("Guardando la factura")
             # boton_guardar.nth(1).click()
             # time.sleep(5)
+            
+            # Busco numero de comprobante y lo guardo en nro_factura
+            widget_doc = frame.locator('div.widget[name="wdg_NumeroDocumento"]')
+            if widget_doc.is_visible() == True:
+                print_with_time("Guardando el numero de factura")
+                nro_factura = frame.locator('div.widget[name="wdg_NumeroDocumento"] >> input[type="textbox"]').input_value()
+                print_with_time(f"Nro de factura asignado: {nro_factura}")
+            else:
+                nro_factura = None
+            
+            frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
+            widget_cae = frame.locator('div.widget[name="wdg_cai"]')
+            if widget_cae.is_visible() == True:
+                print_with_time("Obtengo el CAI/CAE")
+                nro_cae = frame.locator('div.widget[name="wdg_cai"] >> input[type="textbox"]').input_value()
+                print_with_time(f"Nro de CAI: {nro_cae}")
+            else:
+                nro_cae = None
+
+            # Registrar en PostgreSQL con estado Generado (después del guardado real)
+            # TODO: agregar el nro_cae en la tabla 
+            try:
+                cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
+                provincia = remito.get('provincia_destino')
+                guardar_factura_generada(
+                    datetime.now(),
+                    remito.get('comprobante'),
+                    cuit,
+                    company,
+                    provincia,
+                    float(alicuotas_a_cobrar) if 'alicuotas_a_cobrar' in locals() else None,
+                    nro_factura,
+                    'Generado'
+                )
+            except Exception as e:
+                print_with_time(f"No se pudo registrar la factura: {e}")
+
+            
+            
             
             boton_cerrar = frame.locator("#close")
             boton_cerrar.nth(1).click()
@@ -519,7 +715,60 @@ def search_and_make_invoice_dasdach(page, frame, remito) -> None:
         else:
             print_with_time("No se encontraron registros para el remito")
         pass
-     
+
+def agregar_percepcion(frame, percepcion_valor):
+    print_with_time(f"Agregando percepción por valor de: {percepcion_valor:.2f}")
+    time.sleep(1)
+    # Navegar a la pestaña de percepciones
+    frame.locator('div.tab[name="OperacionRetencionTab"]').click()
+    time.sleep(1)
+    
+    # Hacer clic en el botón "Agregar Percepción"
+    boton_agregar = frame.locator('div[name="OperacionRetencionTab"] >> div.newButton')
+    boton_agregar.click()
+    time.sleep(1)
+    
+    
+    tipo_percepcion= "Percepcion IIBB BAs (Padrón)"
+    
+    frame.locator('div.widget[name="wdg_TipoRetencion"] >> input[type="textbox"]').fill(tipo_percepcion)
+    
+    
+    
+    retencion = "Percepción IIBB Buenos Aires"
+    
+    
+    frame.locator('div.widget[name="wdg_Retencion"] >> input[type="textbox"]').fill(retencion)
+
+    importe = percepcion_valor
+    
+    frame.locator('div.widget[name="wdg_ImporteRetencion"] >> input[type="textbox"]').fill(f"{importe:.2f}")
+    
+    hoy = datetime.now()
+    
+    dia = f"{hoy.day:02d}"
+    mes = f"{hoy.month:02d}"
+    anio = str(hoy.year)
+
+    # llenar los tres inputs
+    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="day"]').fill(dia)
+    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="month"]').fill(mes)
+    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="year"]').fill(anio)
+    
+    boton_agregar = frame.locator('a.WIDGETWidgetButton', has_text="Nuevo")
+    boton_agregar.click()
+    
+    #TODO: capturar pantalla y guardar
+    screenshot_bytes = frame.page.screenshot()
+    save_screenshot(screenshot_bytes, "finnegans_facturacion_percepcion_1.png")
+    
+    boton_aceptar = frame.locator('#aceptar')
+    boton_aceptar.click()
+    
+   
+    time.sleep(2)
+    
+    print_with_time("Percepción agregada exitosamente")
 def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
@@ -531,9 +780,9 @@ def ejecutar_factura(page, remito, company) -> None:
         if not frame:
             raise Exception("Failed to create new invoice frame")
         if company == "AVIANCA":
-            search_and_make_invoice_avianca(page, frame, remito)
+            search_and_make_invoice_avianca(page, frame, remito, company)
         else:
-            search_and_make_invoice_dasdach(page, frame, remito)
+            search_and_make_invoice_dasdach(page, frame, remito, company)
         print_with_time(f"Invoice created successfully for remito: {remito['comprobante']}")
 
     except Exception as e:
@@ -691,12 +940,11 @@ def process_company(company: str) -> None:
     remitos_exitosos = 0
     remitos_fallidos = 0
     remitos_exitosos_lista = []
-    remitos_fallidos_lista = []
-    
-    #TODO: listar remitos a procesar
+    remitos_fallidos_lista = []            
     print_with_time("Remitos to be processed:")
     for remito in resumen:
-        print_with_time(f" - {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']}")
+        provincia = remito.get('provincia_destino', 'N/A')
+        print_with_time(f" - {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']} Provincia: {provincia}")
     
      # Solo proceder si hay remitos para procesar
     
