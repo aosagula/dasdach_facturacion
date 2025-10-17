@@ -10,3 +10,5 @@ data
 *.png
 
 __pycache__
+temp
+*.txt

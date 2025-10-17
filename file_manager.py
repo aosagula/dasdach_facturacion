@@ -43,13 +43,13 @@ def create_directories():
         directory.mkdir(parents=True, exist_ok=True)
         logger.info(f"Directorio creado/verificado: {directory}")
 
-# Configuración de base de datos
+# Configuración de base de datos (usando mismas variables que carga_padron_dgr.py)
 DB_CONFIG = {
-    'host': os.getenv('PGHOST', 'localhost'),
-    'port': os.getenv('PGPORT', '5432'),
-    'database': os.getenv('PGDATABASE', 'railway'),
-    'user': os.getenv('PGUSER', 'postgres'),
-    'password': os.getenv('PGPASSWORD', '')
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': os.getenv('DB_PORT', '5432'),
+    'database': os.getenv('DB_NAME', 'railway'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', '')
 }
 
 async def setup_files_table():

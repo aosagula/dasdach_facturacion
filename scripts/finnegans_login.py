@@ -80,6 +80,9 @@ def resumir_transacciones(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     for row in items:
         comp = row.get("COMPROBANTE")
+        ## solo debug de un caso
+        # if row.get("COMPROBANTE") == "R-0001-00010529":
+        #     pass
         if not comp:
             continue
 
@@ -166,14 +169,25 @@ def save_screenshot(image_bytes, filename):
         return None
 
 # ==================== PostgreSQL logging de facturas ====================
-# Config DB igual a otros módulos
+# Config DB igual a otros módulos (usando mismas variables que carga_padron_dgr.py)
 DB_CONFIG = {
-    'host': os.getenv('PGHOST', 'localhost'),
-    'port': os.getenv('PGPORT', '5432'),
-    'database': os.getenv('PGDATABASE', 'railway'),
-    'user': os.getenv('PGUSER', 'postgres'),
-    'password': os.getenv('PGPASSWORD', '')
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'port': os.getenv('DB_PORT', '5432'),
+    'database': os.getenv('DB_NAME', 'railway'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', '')
 }
+
+def get_db_config() -> dict:
+    """Carga .env y retorna la configuración de conexión a Postgres."""
+    load_dotenv()
+    return {
+        'host': os.getenv('DB_HOST', DB_CONFIG.get('host')),
+        'port': os.getenv('DB_PORT', DB_CONFIG.get('port')),
+        'database': os.getenv('DB_NAME', DB_CONFIG.get('database')),
+        'user': os.getenv('DB_USER', DB_CONFIG.get('user')),
+        'password': os.getenv('DB_PASSWORD', DB_CONFIG.get('password')),
+    }
 
 _FACT_TABLE_INITED = False
 _FACT_LOCK = threading.Lock()
@@ -187,7 +201,7 @@ def _ensure_facturas_table():
             return
         conn = None
         try:
-            conn = psycopg2.connect(**DB_CONFIG)
+            conn = psycopg2.connect(**get_db_config())
             cur = conn.cursor()
             cur.execute(
                 """
@@ -200,11 +214,14 @@ def _ensure_facturas_table():
                     provincia_destino VARCHAR(100),
                     alicuota NUMERIC(10,4),
                     numero_factura VARCHAR(100),
+                    nro_cae VARCHAR(100),
                     estado VARCHAR(30) NOT NULL DEFAULT 'Generado',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            # Ensure column exists for existing installations
+            cur.execute("ALTER TABLE facturas_generadas ADD COLUMN IF NOT EXISTS nro_cae VARCHAR(100)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_estado ON facturas_generadas(estado)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_comprobante ON facturas_generadas(comprobante)")
             conn.commit()
@@ -224,18 +241,20 @@ def guardar_factura_generada(
     provincia_destino: str | None,
     alicuota: float | None,
     numero_factura: str | None,
+    nro_cae: str | None,
     estado: str = 'Generado'
 ):
     _ensure_facturas_table()
     conn = None
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        #print_with_time(DB_CONFIG)
+        conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO facturas_generadas
-            (fecha_hora, comprobante, cuit, empresa, provincia_destino, alicuota, numero_factura, estado)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (fecha_hora, comprobante, cuit, empresa, provincia_destino, alicuota, numero_factura, nro_cae, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 fecha_hora,
@@ -245,6 +264,7 @@ def guardar_factura_generada(
                 provincia_destino,
                 alicuota,
                 numero_factura,
+                nro_cae,
                 estado,
             )
         )
@@ -258,7 +278,7 @@ def guardar_factura_generada(
 
 def get_video_path():
     """Obtener la ruta para guardar videos"""
-    load_dotenv()
+    load_dotenv()            
     video_dir = os.getenv('LOG_VIDEO_PATH', './media/videos/')
     Path(video_dir).mkdir(parents=True, exist_ok=True)
     
@@ -286,15 +306,36 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
         video_path = get_video_path()
         print_with_time(f"Video recording enabled - se guardará en: {video_path}")
         context_options = {
+
             "record_video_dir": str(video_path.parent),
-            "record_video_size": {"width": 1280, "height": 720}
+            "record_video_size": {"width": 1280, "height": 720},
+            "no_viewport": True,
+            "user_agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+            "extra_http_headers": {
+                'Referer': 'https://core-web.finneg.com/',
+                'Origin': 'https://core-web.finneg.com',
+            }
+
         }
     else:
         print_with_time("Video recording disabled")
+        context_options = {
+
+            "no_viewport": True,
+            "user_agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+            "extra_http_headers": {
+                'Referer': 'https://core-web.finneg.com/',
+                'Origin': 'https://core-web.finneg.com',
+            }
+
+        }
     
     # Configurar modo headless desde variable de entorno
     headless_mode = os.getenv('HEADLESS', 'true').lower() == 'true'
-    browser = playwright.chromium.launch(headless=headless_mode)
+    browser = playwright.chromium.launch(
+        headless=headless_mode,
+        args=['--start-maximized']
+    )
     context = browser.new_context(**context_options)
     page = context.new_page()
     install_hud(context)
@@ -414,7 +455,7 @@ def navigate_to_section(page, section_name: str) -> bool:
         page.get_by_role("button", name="Gestión Empresarial").click()
         page.get_by_text("Ventas", exact=True).click()
         
-        page.get_by_text("Facturas").click()
+        page.get_by_text(section_name).click()
         #new_page = new_page_info.value
         time.sleep(1)
         #page.wait_for_load_state('networkidle', timeout=10000)
@@ -500,6 +541,13 @@ def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
         filters.nth(6).fill(remito["comprobante"])
         filters.nth(6).press('Enter')
         time.sleep(2)
+        grid_bodys = frame.locator("div.webix_ss_body")
+    
+        for i in range(grid_bodys.count()):
+            if grid_bodys.nth(i).is_visible() == True:
+                grid_body = grid_bodys.nth(i)
+                break
+        
         cantidad_registros = grid_body.locator("div.webix_cell")
         if cantidad_registros.count() >0:
             frame.locator("input.mainCheckbox").nth(1).check()
@@ -514,7 +562,7 @@ def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
             # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
             boton_guardar = frame.locator("#_onSave")
             print_with_time("Guardando la factura")
-            boton_guardar.nth(1).click()
+            #boton_guardar.nth(1).click()
             time.sleep(5)
 
             # Intentar leer el nro de factura asignado
@@ -528,31 +576,29 @@ def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
                 pass
 
             # Registrar en PostgreSQL con estado Generado
-            try:
-                cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
-                provincia = remito.get('provincia_destino')
-                alicuota = None
-                if cuit:
-                    info = get_alicuotas([cuit])
-                    if info.get('encontrados', 0) > 0:
-                        alicuota = info.get('resultados', [{}])[0].get('alicuota')
-                if alicuota is None:
-                    if provincia == 'Buenos Aires':
-                        alicuota = 8.0
-                    else:
-                        alicuota = 0.0
-                guardar_factura_generada(
-                    datetime.now(),
-                    remito.get('comprobante'),
-                    cuit,
-                    company,
-                    provincia,
-                    float(alicuota) if alicuota is not None else None,
-                    nro_factura,
-                    'Generado'
-                )
-            except Exception as e:
-                print_with_time(f"No se pudo registrar la factura: {e}")
+            cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
+            provincia = remito.get('provincia_destino')
+            alicuota = None
+            if cuit:
+                info = get_alicuotas([cuit])
+                if info.get('encontrados', 0) > 0:
+                    alicuota = info.get('resultados', [{}])[0].get('alicuota')
+            if alicuota is None:
+                if provincia == 'Buenos Aires':
+                    alicuota = 8.0
+                else:
+                    alicuota = 0.0
+            guardar_factura_generada(
+                datetime.now(),
+                remito.get('comprobante'),
+                cuit,
+                company,
+                provincia,
+                float(alicuota) if alicuota is not None else None,
+                nro_factura,
+                None,
+                'Generado'
+            )
 
             boton_cerrar = frame.locator("#close")
             boton_cerrar.nth(1).click()
@@ -584,6 +630,19 @@ def get_alicuotas(cuits: List[str]) -> Dict[str, Any]:
     else:
         print_with_time(f"Error al obtener las alícuotas: {response.status_code} - {response.text}")
         return {}
+    
+def wait_for_widget_value(element, widget_name, timeout=15000):
+    selector = f'div.widget[name="{widget_name}"] input'
+    element.wait_for_function(
+        f"""() => {{
+            const el = document.querySelector('{selector}');
+            return el && el.value && el.value.trim() !== "" && el.value.trim() !== "0.00";
+        }}""",
+        timeout=timeout
+    )
+    # devolver valor una vez que está disponible
+    return element.locator(selector).get_attribute("value")
+
 def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
     
     print_with_time("Exploring navigation to add remito details...")
@@ -619,13 +678,16 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             frame.locator('#OPERACIONSIGUIENTEPASO2_0').click()
             time.sleep(1)
             frame.locator('#OPERACIONFINALIZAR_0').click()
-            time.sleep(3)
+            time.sleep(6)
+            #frame = page.wait_for_event("frameattached", timeout=10000)
+            total_bruto = wait_for_widget_value(frame, "wdg_TotalBruto")
             
             print_with_time("Ingresando al detalle de la factura")
             
+            save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_por_generar{remito['comprobante']}.png")
             
             
-            if remito['identificacion_tributaria'] == 'CUIT':
+            if remito['identificacion_tributaria'] == 'C.U.I.T.' or remito['identificacion_tributaria'] == 'CUIT':
                 cuit = re.sub(r'\D', '', remito['nro_de_identificacion'])
                 alicuotas_info = get_alicuotas([cuit])
                 
@@ -637,14 +699,23 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                 else:
                     if remito['provincia_destino'] == 'Buenos Aires':
                         alicuotas_a_cobrar = 8.0  # default si no se encuentra
+                        customer_update( frame, percepcion_valor, remito['nro_de_identificacion'])
+                        raise ValueError("Se actualizó el cliente con la percepción por defecto del 8%")
                     else:
                         alicuotas_a_cobrar = 0.0  # default si no se encuentra
                 
                 percepcion_valor = remito['importe_no_gravado'] * alicuotas_a_cobrar / 100
                 
                 print_with_time(f"CUIT: {cuit} - Alicuota a cobrar: {alicuotas_a_cobrar}% - Percepcion valor: {percepcion_valor:.2f} - Provincia: {remito['provincia_destino']}")
-                if percepcion_valor > 0:
-                    agregar_percepcion( frame, percepcion_valor)
+                
+                percepcion_calculada_text = frame.locator('div.widget[name="wdg_TotalRetenciones"] >> input').input_value()
+                # Convertir texto a float (maneja formatos como "1.234,56" o "1234.56")
+                percepcion_calculada_text = percepcion_calculada_text.replace(",", "")
+                percepcion_calculada_float = round(float(percepcion_calculada_text), 2)
+                percepcion_valor_float = round(float(percepcion_valor), 2)
+                if percepcion_valor_float != percepcion_calculada_float:
+                    print_with_time(f"Percepcion calculada no coincide con la esperada: en Finnegans {percepcion_calculada_float:.2f} vs del padron {percepcion_valor_float:.2f} Provincia: {remito['provincia_destino']}")
+                    raise ValueError(f"Percepcion calculada no coincide con la esperada: en Finnegans {percepcion_calculada_float:.2f} vs del padron {percepcion_valor_float:.2f} Provincia: {remito['provincia_destino']}")
             else:
                 print_with_time(f"Identificacion tributaria no es CUIT, no se agrega percepcion")
                 alicuotas_a_cobrar = 0.0
@@ -664,6 +735,8 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             # boton_guardar.nth(1).click()
             # time.sleep(5)
             
+            save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_guardada{remito['comprobante']}.png")
+            
             # Busco numero de comprobante y lo guardo en nro_factura
             widget_doc = frame.locator('div.widget[name="wdg_NumeroDocumento"]')
             if widget_doc.is_visible() == True:
@@ -672,6 +745,9 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                 print_with_time(f"Nro de factura asignado: {nro_factura}")
             else:
                 nro_factura = None
+            if nro_factura is None or nro_factura == '':
+                print_with_time("No se obtuvo numero de factura, la factura no fue generada correctamente")
+                raise ValueError("No se obtuvo numero de factura, la factura no fue generada correctamente")
             
             frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
             widget_cae = frame.locator('div.widget[name="wdg_cai"]')
@@ -682,8 +758,11 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             else:
                 nro_cae = None
 
+            if nro_cae is None or nro_cae == '':
+                print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
+                raise ValueError("No se obtuvo CAE, la factura no fue generada correctamente")
+            
             # Registrar en PostgreSQL con estado Generado (después del guardado real)
-            # TODO: agregar el nro_cae en la tabla 
             try:
                 cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
                 provincia = remito.get('provincia_destino')
@@ -695,6 +774,7 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                     provincia,
                     float(alicuotas_a_cobrar) if 'alicuotas_a_cobrar' in locals() else None,
                     nro_factura,
+                    nro_cae,
                     'Generado'
                 )
             except Exception as e:
@@ -720,40 +800,55 @@ def agregar_percepcion(frame, percepcion_valor):
     print_with_time(f"Agregando percepción por valor de: {percepcion_valor:.2f}")
     time.sleep(1)
     # Navegar a la pestaña de percepciones
-    frame.locator('div.tab[name="OperacionRetencionTab"]').click()
+    frame.locator('div.tab[name="Retenciones y Percepciones"]').click()
     time.sleep(1)
     
     # Hacer clic en el botón "Agregar Percepción"
-    boton_agregar = frame.locator('div[name="OperacionRetencionTab"] >> div.newButton')
+    boton_agregar = frame.locator('div[name="Retenciones y Percepciones"] >> div.newButton')
     boton_agregar.click()
     time.sleep(1)
     
     
     tipo_percepcion= "Percepcion IIBB BAs (Padrón)"
     
-    frame.locator('div.widget[name="wdg_TipoRetencion"] >> input[type="textbox"]').fill(tipo_percepcion)
+    tipo_rercepcion_input = frame.locator('div.widget[name="wdg_RetencionTipoID"] >> input[type="textbox"]')
+    tipo_rercepcion_input.fill(tipo_percepcion)
+    tipo_rercepcion_input.press('Enter')
+    time.sleep(1)
+    tipo_rercepcion_input.press('Enter')
     
     
+    retencion = "Percepción IIBB Buenos Aires" 
+    retencion_input = frame.locator('div.widget[name="wdg_RetencionID"] >> input[type="textbox"]')
+    retencion_input.fill(retencion)
     
-    retencion = "Percepción IIBB Buenos Aires"
-    
-    
-    frame.locator('div.widget[name="wdg_Retencion"] >> input[type="textbox"]').fill(retencion)
-
+    retencion_input.press('Enter')
+    time.sleep(1)
+    retencion_input.press('Enter')
     importe = percepcion_valor
     
-    frame.locator('div.widget[name="wdg_ImporteRetencion"] >> input[type="textbox"]').fill(f"{importe:.2f}")
+    frame.locator('div.widget[name="wdg_ExcepcionPorcentaje"] >> input[type="textbox"]').fill(f"{importe:.2f}")
     
     hoy = datetime.now()
     
-    dia = f"{hoy.day:02d}"
+    #dia = f"{hoy.day:02d}"
+    dia = '01'
     mes = f"{hoy.month:02d}"
     anio = str(hoy.year)
 
     # llenar los tres inputs
-    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="day"]').fill(dia)
-    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="month"]').fill(mes)
-    frame.locator('div.widget[name="wdg_FechaRetencion"] input[name="year"]').fill(anio)
+    frame.locator('div.widget[name="wdg_ExcepcionFechaDesde"] input[name="day"]').fill(dia)
+    frame.locator('div.widget[name="wdg_ExcepcionFechaDesde"] input[name="month"]').fill(mes)
+    frame.locator('div.widget[name="wdg_ExcepcionFechaDesde"] input[name="year"]').fill(anio)
+
+    # Calcular el último día del mes en curso
+    import calendar
+    ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
+    dia_hasta = f"{ultimo_dia:02d}"
+
+    frame.locator('div.widget[name="wdg_ExcepcionFechaHasta"] input[name="day"]').fill(dia_hasta)
+    frame.locator('div.widget[name="wdg_ExcepcionFechaHasta"] input[name="month"]').fill(mes)
+    frame.locator('div.widget[name="wdg_ExcepcionFechaHasta"] input[name="year"]').fill(anio)
     
     boton_agregar = frame.locator('a.WIDGETWidgetButton', has_text="Nuevo")
     boton_agregar.click()
@@ -773,7 +868,7 @@ def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
         time.sleep(2)
-        if not navigate_to_section(page, "Facturación"):
+        if not navigate_to_section(page, "Facturas"):
             raise Exception("Failed to navigate to Facturación section")
         time.sleep(2)
         frame = create_new_invoice(page, remito)
@@ -811,6 +906,7 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
     # Listas para tracking detallado
     remitos_exitosos_lista = []
     remitos_fallidos_lista = []
+    
 
     # Buscar elementos de navegación o menús
     for i, remito in enumerate(resumen, 1):
@@ -821,20 +917,25 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
                 print_with_time(f"Remito {remito['comprobante']} tiene monto 0, no se procesa")
                 #continue
             else:
+                # Solo por Debug
+                # if remito['comprobante'] == 'R-0001-00010529':
                 ejecutar_factura(page, remito, company)
+            
             remitos_exitosos += 1
             remitos_exitosos_lista.append(remito['comprobante'])
-            print_with_time(f"✓ Remito {remito['comprobante']} procesado exitosamente")
+            print_with_time(f"-> Remito {remito['comprobante']} procesado exitosamente")
         except Exception as e:
             remitos_fallidos += 1
             error_trace = traceback.format_exc()
             error_msg = f"{str(e)}\n{error_trace}"
             remitos_fallidos_lista.append({'comprobante': remito['comprobante'], 'error': error_msg})
-            print_with_time(f"✗ Error procesando remito {remito['comprobante']}: {str(e)}")
+            print_with_time(f"!! Error procesando remito {remito['comprobante']}: {str(e)}")
             print_with_time(f"Stack trace:\n{error_trace}")
             # Continuar con el siguiente remito sin interrumpir el proceso
         finally:
             hide_comprobante(page)
+            page.goto(page.url)
+            
 
     return remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista
 def run_finnegans_reports(browser, context, page) -> None:
@@ -976,6 +1077,7 @@ def process_company(company: str) -> None:
     print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, fin - inicio)
 def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, tiempo_transcurrido):
     print_with_time("=" * 50)
+    print_with_time("INICIO BODY")
     print_with_time("REPORTE FINAL DE PROCESAMIENTO")
     print_with_time("=" * 50)
     print_with_time(f"Total de remitos encontrados: {len(resumen)}")
@@ -1015,18 +1117,48 @@ def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, re
                 print_with_time(remito_info['error'])
                 print_with_time("-" * 40)
 
-    print_with_time("")
+    print_with_time('FIN BODY')
     print_with_time(f"Fecha y hora de inicio: {inicio.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Fecha y hora de finalización: {fin.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Tiempo transcurrido: {tiempo_transcurrido}")
     print_with_time("=" * 50)
+def customer_update(page, cuit):
+    navigate_to_section(page, "Clientes")
+    time.sleep(2)
+    frame = page.wait_for_event("frameattached", timeout=10000)
+    frame=page.frames[1] # Ajusta el índice según sea necesario
+    percepcion_valor = 0.0
+    filters = frame.locator("input.TOOLBARTooltipSearch")
+    filters.fill(cuit)
+    filters.press('Enter')
+    grid_body = frame.locator("div.webix_ss_body")
+    cantidad_registros = grid_body.locator("div.webix_cell")
+    if cantidad_registros.count() >0:
+        percepcion_valor = 0
+        link = frame.locator('div.webix_column[column="2"] a')
+        link.first.click()
+        time.sleep(2)
+        agregar_percepcion( frame, percepcion_valor)
     
+    boton_guardar = frame.locator("#_onSave")
+    print_with_time("Guardando la percepcion del cliente")
+    #boton_guardar.nth(1).click()
+    boton_cerrar = frame.locator("#close")
+    boton_cerrar.nth(1).click()
+    time.sleep(1)
 def main():
-    
-    #process_company("AVIANCA")
-    process_company("Das Dach")
-    # Reporte final
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Process company invoices')
+    parser.add_argument('--company', type=str, required=True, help='Company name to process')
+    args = parser.parse_args()
+
+    process_company(args.company)
 
 
 if __name__ == "__main__":
     main()
+
+
+
+    
