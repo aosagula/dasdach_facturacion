@@ -562,7 +562,7 @@ def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
             # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
             boton_guardar = frame.locator("#_onSave")
             print_with_time("Guardando la factura")
-            #boton_guardar.nth(1).click()
+            boton_guardar.nth(1).click()
             time.sleep(5)
 
             # Intentar leer el nro de factura asignado
@@ -682,6 +682,10 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             #frame = page.wait_for_event("frameattached", timeout=10000)
             total_bruto = wait_for_widget_value(frame, "wdg_TotalBruto")
             
+            if total_bruto is None or total_bruto == '' or float(total_bruto.replace(",", "")) == 0.0:
+                print_with_time("Imposible generar factura: Total Bruto es cero o nulo")
+                raise ValueError("Imposible generar factura: Total Bruto es cero o nulo")
+            
             print_with_time("Ingresando al detalle de la factura")
             
             save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_por_generar{remito['comprobante']}.png")
@@ -732,9 +736,11 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
             boton_guardar = frame.locator("#_onSave")
             print_with_time("Guardando la factura")
-            # boton_guardar.nth(1).click()
-            # time.sleep(5)
+            boton_guardar.nth(1).click()
+            time.sleep(7)
             
+            
+            valor_factura_comprobante = wait_for_widget_value(frame, "wdg_NumeroDocumento")
             save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_guardada{remito['comprobante']}.png")
             
             # Busco numero de comprobante y lo guardo en nro_factura
