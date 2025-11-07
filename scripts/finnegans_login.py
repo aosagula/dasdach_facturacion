@@ -14,6 +14,54 @@ import threading
 import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+def parse_fecha(value: Any) -> Optional[datetime]:
+    """
+    Parsea fechas comunes y retorna un datetime o None.
+    Soporta: ISO 8601 (incluyendo sufijo 'Z'), 'YYYY-MM-DD', 'DD/MM/YYYY',
+    y 'YYYY-MM-DDTHH:MM:SS'. Optimizado para decisiones rápidas.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+
+        # ISO 8601 rápido (maneja 'Z' como UTC)
+        if 'T' in s:
+            if s.endswith('Z'):
+                try:
+                    return datetime.fromisoformat(s.replace('Z', '+00:00'))
+                except Exception:
+                    pass
+            # 'YYYY-MM-DDTHH:MM:SS' (y posibles offsets)
+            if len(s) >= 19 and s[4:5] == '-' and s[7:8] == '-' and s[10:11] == 'T':
+                try:
+                    return datetime.fromisoformat(s)
+                except Exception:
+                    try:
+                        return datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
+                    except Exception:
+                        pass
+
+        # 'YYYY-MM-DD'
+        if len(s) == 10 and s[4:5] == '-' and s[7:8] == '-':
+            try:
+                return datetime.strptime(s, '%Y-%m-%d')
+            except Exception:
+                pass
+
+        # 'DD/MM/YYYY'
+        if len(s) == 10 and s[2:3] == '/' and s[5:6] == '/':
+            try:
+                return datetime.strptime(s, '%d/%m/%Y')
+            except Exception:
+                pass
+
+    return None
+
 def timestamp() -> str:
     """Retorna el timestamp actual formateado"""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -139,6 +187,26 @@ def get_remitos_pendientes(company: str) -> list:
         data = response.json()
         remitos_company = [r for r in data if r.get('EMPRESA') == company]
         return remitos_company
+    else:
+        print_with_time(f"Error al obtener los remitos: {response.status_code} - {response.text}")
+    
+    
+        return []
+    
+    
+def get_remito_detalle(DOCNROINT) -> list:
+    """Obtiene el detalle de un remito del numero interno de finnegans"""
+    load_dotenv()
+    token=get_token()
+    print_with_time(f"Obteniendo remitos pendientes para la empresa: {DOCNROINT}")
+    
+    url = f"https://api.teamplace.finneg.com/api/pedidoVenta/{DOCNROINT}?ACCESS_TOKEN={token}"
+    
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        
+        return data
     else:
         print_with_time(f"Error al obtener los remitos: {response.status_code} - {response.text}")
     
@@ -870,6 +938,7 @@ def agregar_percepcion(frame, percepcion_valor):
     time.sleep(2)
     
     print_with_time("Percepción agregada exitosamente")
+
 def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
@@ -908,11 +977,12 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
     # Contadores de éxito y error
     remitos_exitosos = 0
     remitos_fallidos = 0
+    remitos_no_procesados = 0
 
     # Listas para tracking detallado
     remitos_exitosos_lista = []
     remitos_fallidos_lista = []
-    
+    remitos_no_procesados_lista = []    
 
     # Buscar elementos de navegación o menús
     for i, remito in enumerate(resumen, 1):
@@ -920,16 +990,43 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
             print_with_time(f"Processing remito {i}/{len(resumen)}: {remito['comprobante']} for client {remito['cliente']} CUIT: {remito['nro_de_identificacion']}")
             show_comprobante(page, f"Procesando remito: {remito['comprobante']} ({i}/{len(resumen)})")
             if remito['importe'] in (0, None, ''):
+                remitos_no_procesados += 1
+                remitos_no_procesados_lista.append({'comprobante': remito['comprobante'], 'razon': 'Monto 0'})
                 print_with_time(f"Remito {remito['comprobante']} tiene monto 0, no se procesa")
                 #continue
             else:
-                # Solo por Debug
-                # if remito['comprobante'] == 'R-0001-00010529':
-                ejecutar_factura(page, remito, company)
+                
+                if company == "AVIANCA":
+                    ejecutar_factura(page, remito, company)
+                    remitos_exitosos += 1
+                    remitos_exitosos_lista.append(remito['comprobante'])
+                    print_with_time(f"-> Remito {remito['comprobante']} procesado exitosamente")
+                else:
+                    remito_detalle = get_remito_detalle(remito['docnroint'])
+                    
+                    
+                    # Parsear y validar fecha de entrega menor a la fecha actual
+                    fecha_entrega_dt = None
+                    if remito_detalle is not None:
+                        fecha_raw = remito_detalle.get('USR_FechaEntrega')
+                        if fecha_raw is not None:
+                            fecha_entrega_dt = parse_fecha(fecha_raw)
+
+                    if remito_detalle is not None and fecha_entrega_dt is not None and fecha_entrega_dt.date() < datetime.now().date():
+                        # Solo por Debug
+                        #if remito['comprobante'] == 'R-0001-00010644':
+                        ejecutar_factura(page, remito, company)
+                        remitos_exitosos += 1
+                        remitos_exitosos_lista.append(remito['comprobante'])
+                        print_with_time(f"-> Remito {remito['comprobante']} Fecha Salida {fecha_raw} procesado exitosamente")
+                    else:
+                        print_with_time(f"Remito {remito['comprobante']} no tiene fecha de salida registrada, no se procesa")
+                        remitos_no_procesados += 1
+                        remitos_no_procesados_lista.append({'comprobante': remito['comprobante'], 'razon': 'Fecha de entrega no registrada o inválida'})
+                        #continue  # Saltar al siguiente remito
+                        
             
-            remitos_exitosos += 1
-            remitos_exitosos_lista.append(remito['comprobante'])
-            print_with_time(f"-> Remito {remito['comprobante']} procesado exitosamente")
+            
         except Exception as e:
             remitos_fallidos += 1
             error_trace = traceback.format_exc()
@@ -943,7 +1040,8 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
             page.goto(page.url)
             
 
-    return remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista
+    return remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista
+
 def run_finnegans_reports(browser, context, page) -> None:
     if not page:
         print_with_time("Error: No active page session")
@@ -1046,8 +1144,10 @@ def process_company(company: str) -> None:
 
     remitos_exitosos = 0
     remitos_fallidos = 0
+    remitos_no_procesados = 0
     remitos_exitosos_lista = []
-    remitos_fallidos_lista = []            
+    remitos_fallidos_lista = []
+    remitos_no_procesados_lista = []            
     print_with_time("Remitos to be processed:")
     for remito in resumen:
         provincia = remito.get('provincia_destino', 'N/A')
@@ -1063,7 +1163,7 @@ def process_company(company: str) -> None:
                 print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
 
                 # Ejecutar diferentes módulos
-                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista = run_finnegans_facturacion(browser, context, page, company, resumen)
+                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista = run_finnegans_facturacion(browser, context, page, company, resumen)
 
                 # Opcional: ejecutar otros módulos
                 # run_finnegans_reports(browser, context, page)
@@ -1080,14 +1180,16 @@ def process_company(company: str) -> None:
 
     fin = datetime.now()
     tiempo_transcurrido = fin - inicio
-    print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, fin - inicio)
-def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, resumen, inicio, fin, tiempo_transcurrido):
+    print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista, resumen, inicio, fin, fin - inicio)
+
+def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista, resumen, inicio, fin, tiempo_transcurrido):
     print_with_time("=" * 50)
     print_with_time("INICIO BODY")
     print_with_time("REPORTE FINAL DE PROCESAMIENTO")
     print_with_time("=" * 50)
     print_with_time(f"Total de remitos encontrados: {len(resumen)}")
     print_with_time(f"Remitos procesados exitosamente: {remitos_exitosos}")
+    print_with_time(f"Remitos no procesados: {remitos_no_procesados}")
     print_with_time(f"Remitos con errores: {remitos_fallidos}")
     if len(resumen) > 0:
         porcentaje_exito = (remitos_exitosos / len(resumen)) * 100
@@ -1101,6 +1203,14 @@ def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, re
         for i, remito in enumerate(remitos_exitosos_lista, 1):
             print_with_time(f"{i:2d}. {remito} - EXITOSO")
 
+    # Lista detallada de remitos no procesados
+    if remitos_no_procesados_lista:
+        print_with_time("")
+        print_with_time("REMITOS NO PROCESADOS:")
+        print_with_time("-" * 40)
+        for i, remito_info in enumerate(remitos_no_procesados_lista, 1):
+            print_with_time(f"{i:2d}. {remito_info['comprobante']} - NO PROCESADO")
+            print_with_time(f"    Razón: {remito_info['razon']}")
     # Lista detallada de remitos con errores
     if remitos_fallidos_lista:
         print_with_time("")
@@ -1128,6 +1238,7 @@ def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, re
     print_with_time(f"Fecha y hora de finalización: {fin.strftime('%Y-%m-%d %H:%M:%S')}")
     print_with_time(f"Tiempo transcurrido: {tiempo_transcurrido}")
     print_with_time("=" * 50)
+    
 def customer_update(page, cuit):
     navigate_to_section(page, "Clientes")
     time.sleep(2)
@@ -1152,6 +1263,7 @@ def customer_update(page, cuit):
     boton_cerrar = frame.locator("#close")
     boton_cerrar.nth(1).click()
     time.sleep(1)
+    
 def main():
     import argparse
 
@@ -1164,7 +1276,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-    
