@@ -14,6 +14,10 @@ import threading
 import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Excepción específica para abortar la facturación completa
+class FacturacionAbortada(Exception):
+    pass
+
 def parse_fecha(value: Any) -> Optional[datetime]:
     """
     Parsea fechas comunes y retorna un datetime o None.
@@ -831,10 +835,11 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                 print_with_time(f"Nro de CAI: {nro_cae}")
             else:
                 nro_cae = None
-
+                
+            
             if nro_cae is None or nro_cae == '':
                 print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
-                raise ValueError("No se obtuvo CAE, la factura no fue generada correctamente")
+                raise FacturacionAbortada("No se obtuvo CAE, la factura no fue generada correctamente")
             
             # Registrar en PostgreSQL con estado Generado (después del guardado real)
             try:
@@ -983,6 +988,9 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
     remitos_exitosos_lista = []
     remitos_fallidos_lista = []
     remitos_no_procesados_lista = []    
+    
+    # Flag para abortar proceso completo si falta CAE
+    abort_process = False
 
     # Buscar elementos de navegación o menús
     for i, remito in enumerate(resumen, 1):
@@ -1015,6 +1023,7 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
                     if remito_detalle is not None and fecha_entrega_dt is not None and fecha_entrega_dt.date() < datetime.now().date():
                         # Solo por Debug
                         #if remito['comprobante'] == 'R-0001-00010644':
+                        print_with_time(f"Remito {remito['comprobante']} tiene fecha de entrega {fecha_raw}, se intenta procesar")
                         ejecutar_factura(page, remito, company)
                         remitos_exitosos += 1
                         remitos_exitosos_lista.append(remito['comprobante'])
@@ -1034,10 +1043,17 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
             remitos_fallidos_lista.append({'comprobante': remito['comprobante'], 'error': error_msg})
             print_with_time(f"!! Error procesando remito {remito['comprobante']}: {str(e)}")
             print_with_time(f"Stack trace:\n{error_trace}")
+            # Si no se obtuvo CAE, marcar para abortar proceso completo
+            if isinstance(e, FacturacionAbortada) or 'No se obtuvo CAE' in str(e):
+                print_with_time("Abortando proceso de facturación por CAE faltante")
+                abort_process = True
             # Continuar con el siguiente remito sin interrumpir el proceso
         finally:
             hide_comprobante(page)
             page.goto(page.url)
+            if abort_process:
+                print_with_time("Proceso de facturación abortado. No se procesarán más remitos.")
+                break
             
 
     return remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista
