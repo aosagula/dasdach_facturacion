@@ -524,10 +524,10 @@ def navigate_to_section(page, section_name: str) -> bool:
         print_with_time(f"Navigating to {section_name} section...")
         page.locator("#menu_button i").click()
         
-        page.get_by_role("button", name="Gestión Empresarial").click()
-        page.get_by_text("Ventas", exact=True).click()
+        page.get_by_role("button", name="Favoritos").click()
+        #page.get_by_text("Ventas", exact=True).click()
         
-        page.get_by_text(section_name).click()
+        page.get_by_text(section_name, exact=True).click()
         #new_page = new_page_info.value
         time.sleep(1)
         #page.wait_for_load_state('networkidle', timeout=10000)
@@ -826,17 +826,21 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             if nro_factura is None or nro_factura == '':
                 print_with_time("No se obtuvo numero de factura, la factura no fue generada correctamente")
                 raise ValueError("No se obtuvo numero de factura, la factura no fue generada correctamente")
-            
-            frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
-            widget_cae = frame.locator('div.widget[name="wdg_cai"]')
-            if widget_cae.is_visible() == True:
-                print_with_time("Obtengo el CAI/CAE")
-                nro_cae = frame.locator('div.widget[name="wdg_cai"] >> input[type="textbox"]').input_value()
-                print_with_time(f"Nro de CAI: {nro_cae}")
-            else:
-                nro_cae = None
+            time.sleep(5)
+            nro_cae = None
+            for intento in range(3):
+                frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
+                widget_cae = frame.locator('div.widget[name="wdg_cai"]')
+                if widget_cae.is_visible() == True:
+                    print_with_time("Obtengo el CAI/CAE")
+                    nro_cae = frame.locator('div.widget[name="wdg_cai"] >> input[type="textbox"]').input_value()
+                    print_with_time(f"Nro de CAI: {nro_cae}")
+                    if nro_cae is not None and nro_cae != '':
+                        break
+                if intento < 2:
+                    print_with_time(f"Reintentando obtener CAE ({intento+1}/3)")
+                    time.sleep(3)
                 
-            
             if nro_cae is None or nro_cae == '':
                 print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
                 raise FacturacionAbortada("No se obtuvo CAE, la factura no fue generada correctamente")
@@ -864,7 +868,7 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
             
             boton_cerrar = frame.locator("#close")
             boton_cerrar.nth(1).click()
-            time.sleep(1)
+            time.sleep(3)
             popup = frame.locator("div.fafpopup")
             if popup.is_visible() == True:
                 close_button = frame.locator("#showAskPopupNoButton")
@@ -948,7 +952,7 @@ def ejecutar_factura(page, remito, company) -> None:
     try:
         # Navegar a la sección de facturación
         time.sleep(2)
-        if not navigate_to_section(page, "Facturas"):
+        if not navigate_to_section(page, "Facturas de Venta - Das Dach"):
             raise Exception("Failed to navigate to Facturación section")
         time.sleep(2)
         frame = create_new_invoice(page, remito)
@@ -1017,6 +1021,7 @@ def run_finnegans_facturacion(browser, context, page, company, resumen) -> tuple
                     fecha_entrega_dt = None
                     if remito_detalle is not None:
                         fecha_raw = remito_detalle.get('USR_FechaEntrega')
+                        print_with_time(f"Remito {remito['comprobante']} USR_FechaEntrega: {fecha_raw}")
                         if fecha_raw is not None:
                             fecha_entrega_dt = parse_fecha(fecha_raw)
 
