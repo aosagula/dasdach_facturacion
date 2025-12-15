@@ -416,7 +416,7 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
         page.goto(webpage)
         
         print_with_time("Waiting for page to load...")
-        page.wait_for_load_state('networkidle')
+        #page.wait_for_load_state('networkidle')
         
        
         
@@ -803,66 +803,68 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                 checkbox = widget.locator('input[type="checkbox"]')
                 checkbox.check()
                 time.sleep(3)
-            
-            # TODO: Guardar Documento
-            # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
-            boton_guardar = frame.locator("#_onSave")
-            print_with_time("Guardando la factura")
-            boton_guardar.nth(1).click()
-            time.sleep(7)
-            
-            
-            valor_factura_comprobante = wait_for_widget_value(frame, "wdg_NumeroDocumento")
-            save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_guardada{remito['comprobante']}.png")
-            
-            # Busco numero de comprobante y lo guardo en nro_factura
-            widget_doc = frame.locator('div.widget[name="wdg_NumeroDocumento"]')
-            if widget_doc.is_visible() == True:
-                print_with_time("Guardando el numero de factura")
-                nro_factura = frame.locator('div.widget[name="wdg_NumeroDocumento"] >> input[type="textbox"]').input_value()
-                print_with_time(f"Nro de factura asignado: {nro_factura}")
-            else:
-                nro_factura = None
-            if nro_factura is None or nro_factura == '':
-                print_with_time("No se obtuvo numero de factura, la factura no fue generada correctamente")
-                raise ValueError("No se obtuvo numero de factura, la factura no fue generada correctamente")
-            time.sleep(5)
-            nro_cae = None
-            for intento in range(3):
-                frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
-                widget_cae = frame.locator('div.widget[name="wdg_cai"]')
-                if widget_cae.is_visible() == True:
-                    print_with_time("Obtengo el CAI/CAE")
-                    nro_cae = frame.locator('div.widget[name="wdg_cai"] >> input[type="textbox"]').input_value()
-                    print_with_time(f"Nro de CAI: {nro_cae}")
-                    if nro_cae is not None and nro_cae != '':
-                        break
-                if intento < 2:
-                    print_with_time(f"Reintentando obtener CAE ({intento+1}/3)")
-                    time.sleep(3)
-                
-            if nro_cae is None or nro_cae == '':
-                print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
-                raise FacturacionAbortada("No se obtuvo CAE, la factura no fue generada correctamente")
-            
-            # Registrar en PostgreSQL con estado Generado (después del guardado real)
             try:
-                cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
-                provincia = remito.get('provincia_destino')
-                guardar_factura_generada(
-                    datetime.now(),
-                    remito.get('comprobante'),
-                    cuit,
-                    company,
-                    provincia,
-                    float(alicuotas_a_cobrar) if 'alicuotas_a_cobrar' in locals() else None,
-                    nro_factura,
-                    nro_cae,
-                    'Generado'
-                )
+                # TODO: Guardar Documento
+                # Hay dos botones con el mismo id, se toma el segundo que es el boton con la palabra "Guardar "
+                boton_guardar = frame.locator("#_onSave")
+                print_with_time("Guardando la factura")
+                boton_guardar.nth(1).click()
+                time.sleep(7)
+                
+                
+                valor_factura_comprobante = wait_for_widget_value(frame, "wdg_NumeroDocumento")
+                save_screenshot(page.screenshot(), f"finnegans_facturacion_factura_guardada{remito['comprobante']}.png")
+                
+                # Busco numero de comprobante y lo guardo en nro_factura
+                widget_doc = frame.locator('div.widget[name="wdg_NumeroDocumento"]')
+                if widget_doc.is_visible() == True:
+                    print_with_time("Guardando el numero de factura")
+                    nro_factura = frame.locator('div.widget[name="wdg_NumeroDocumento"] >> input[type="textbox"]').input_value()
+                    print_with_time(f"Nro de factura asignado: {nro_factura}")
+                else:
+                    nro_factura = None
+                if nro_factura is None or nro_factura == '':
+                    print_with_time("No se obtuvo numero de factura, la factura no fue generada correctamente")
+                    raise ValueError("No se obtuvo numero de factura, la factura no fue generada correctamente")
+                time.sleep(5)
+                nro_cae = None
+                for intento in range(3):
+                    frame.locator('div.tab[name="OperacioninformacionFiscalTab"]').click()
+                    widget_cae = frame.locator('div.widget[name="wdg_cai"]')
+                    if widget_cae.is_visible() == True:
+                        print_with_time("Obtengo el CAI/CAE")
+                        nro_cae = frame.locator('div.widget[name="wdg_cai"] >> input[type="textbox"]').input_value()
+                        print_with_time(f"Nro de CAI: {nro_cae}")
+                        if nro_cae is not None and nro_cae != '':
+                            break
+                    if intento < 2:
+                        print_with_time(f"Reintentando obtener CAE ({intento+1}/3)")
+                        time.sleep(3)
+                    
+                if nro_cae is None or nro_cae == '':
+                    print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
+                    raise FacturacionAbortada("No se obtuvo CAE, la factura no fue generada correctamente")
+                
+                # Registrar en PostgreSQL con estado Generado (después del guardado real)
+                try:
+                    cuit = re.sub(r'\D', '', remito.get('nro_de_identificacion', '') or '')
+                    provincia = remito.get('provincia_destino')
+                    guardar_factura_generada(
+                        datetime.now(),
+                        remito.get('comprobante'),
+                        cuit,
+                        company,
+                        provincia,
+                        float(alicuotas_a_cobrar) if 'alicuotas_a_cobrar' in locals() else None,
+                        nro_factura,
+                        nro_cae,
+                        'Generado'
+                    )
+                except Exception as e:
+                    print_with_time(f"No se pudo registrar la factura: {e}")
             except Exception as e:
-                print_with_time(f"No se pudo registrar la factura: {e}")
-
+                print_with_time(f"Error al guardar la factura: {e}")
+                raise FacturacionAbortada("Error al guardar la factura {e}")
             
             
             
@@ -954,7 +956,7 @@ def ejecutar_factura(page, remito, company) -> None:
         time.sleep(2)
         if not navigate_to_section(page, "Facturas de Venta - Das Dach"):
             raise Exception("Failed to navigate to Facturación section")
-        time.sleep(2)
+        time.sleep(4)
         frame = create_new_invoice(page, remito)
         if not frame:
             raise Exception("Failed to create new invoice frame")
