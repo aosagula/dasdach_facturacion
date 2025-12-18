@@ -2418,7 +2418,12 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
                     'log_completo': log_completo
                 }
 
-                print(f"[{job_id}] Enviando notificación a webhook: {webhook_url}")
+                print(f"[{job_id}] ========================================")
+                print(f"[{job_id}] ENVIANDO WEBHOOK")
+                print(f"[{job_id}] URL:    {webhook_url}")
+                print(f"[{job_id}] Method: POST")
+                print(f"[{job_id}] Headers: {{'Content-Type': 'application/json'}}")
+                print(f"[{job_id}] ========================================")
 
                 response = requests.post(
                     webhook_url,
@@ -2426,12 +2431,19 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
                     timeout=30
                 )
 
+                print(f"[{job_id}] ========================================")
+                print(f"[{job_id}] RESPUESTA DEL WEBHOOK")
+                print(f"[{job_id}] Status Code: {response.status_code}")
+                print(f"[{job_id}] Response Body: {response.text[:200]}")
+                print(f"[{job_id}] ========================================")
+
                 if response.status_code == 200:
-                    print(f"[{job_id}] Webhook notificado exitosamente")
+                    print(f"[{job_id}] ✅ Webhook notificado exitosamente")
                     jobs_storage[job_id]['webhook_notified'] = True
                 else:
-                    print(f"[{job_id}] Error al notificar webhook: {response.status_code}")
+                    print(f"[{job_id}] ❌ Error al notificar webhook: HTTP {response.status_code}")
                     jobs_storage[job_id]['webhook_error'] = f"HTTP {response.status_code}"
+                    jobs_storage[job_id]['webhook_response'] = response.text[:500]
 
             except Exception as e:
                 print(f"[{job_id}] Error enviando webhook: {str(e)}")
@@ -2457,13 +2469,21 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
         # Notificar timeout vía webhook
         if webhook_url:
             try:
-                requests.post(
+                print(f"[{job_id}] ========================================")
+                print(f"[{job_id}] ENVIANDO WEBHOOK (TIMEOUT)")
+                print(f"[{job_id}] URL:    {webhook_url}")
+                print(f"[{job_id}] Method: POST")
+                print(f"[{job_id}] ========================================")
+
+                response = requests.post(
                     webhook_url,
                     json=jobs_storage[job_id],
                     timeout=30
                 )
-            except:
-                pass
+
+                print(f"[{job_id}] Webhook timeout notificado - Status: {response.status_code}")
+            except Exception as webhook_error:
+                print(f"[{job_id}] Error enviando webhook timeout: {str(webhook_error)}")
 
     except Exception as e:
         log_capture.stop()
@@ -2483,13 +2503,22 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
         # Notificar error vía webhook
         if webhook_url:
             try:
-                requests.post(
+                print(f"[{job_id}] ========================================")
+                print(f"[{job_id}] ENVIANDO WEBHOOK (ERROR)")
+                print(f"[{job_id}] URL:    {webhook_url}")
+                print(f"[{job_id}] Method: POST")
+                print(f"[{job_id}] Error:  {str(e)}")
+                print(f"[{job_id}] ========================================")
+
+                response = requests.post(
                     webhook_url,
                     json=jobs_storage[job_id],
                     timeout=30
                 )
-            except:
-                pass
+
+                print(f"[{job_id}] Webhook error notificado - Status: {response.status_code}")
+            except Exception as webhook_error:
+                print(f"[{job_id}] Error enviando webhook error: {str(webhook_error)}")
 
 @app.post("/finnegans/start",
     summary="Iniciar proceso de facturación Finnegans (async)",
