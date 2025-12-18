@@ -6,105 +6,102 @@ import re
 import sys
 import os
 import requests
-import psycopg2
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 import threading
 import traceback
-from scripts.util import print_with_time, timestamp, parse_fecha, save_screenshot
-from scripts.finnegans_common import close_finnegans_session, install_hud, get_token, run_finnegans_login
-from scripts.db import guardar_factura_generada
+from util import print_with_time, timestamp, parse_fecha, save_screenshot
+from finnegans_common import close_finnegans_session, install_hud, navigate_to_section, run_finnegans_login, select_company_action, find_in_all_frames, find_frame_with_plantillas, wait_in_all_frames
+from db import get_facturas_envio_pendiente
  
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Excepción específica para abortar la facturación completa
-class FacturacionAbortada(Exception):
-    pass
 
-# def parse_fecha(value: Any) -> Optional[datetime]:
-#     """
-#     Parsea fechas comunes y retorna un datetime o None.
-#     Soporta: ISO 8601 (incluyendo sufijo 'Z'), 'YYYY-MM-DD', 'DD/MM/YYYY',
-#     y 'YYYY-MM-DDTHH:MM:SS'. Optimizado para decisiones rápidas.
-#     """
-#     if value is None:
-#         return None
-#     if isinstance(value, datetime):
-#         return value
-#     if isinstance(value, str):
-#         s = value.strip()
-#         if not s:
-#             return None
 
-#         # ISO 8601 rápido (maneja 'Z' como UTC)
-#         if 'T' in s:
-#             if s.endswith('Z'):
-#                 try:
-#                     return datetime.fromisoformat(s.replace('Z', '+00:00'))
-#                 except Exception:
-#                     pass
-#             # 'YYYY-MM-DDTHH:MM:SS' (y posibles offsets)
-#             if len(s) >= 19 and s[4:5] == '-' and s[7:8] == '-' and s[10:11] == 'T':
-#                 try:
-#                     return datetime.fromisoformat(s)
-#                 except Exception:
-#                     try:
-#                         return datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
-#                     except Exception:
-#                         pass
 
-#         # 'YYYY-MM-DD'
-#         if len(s) == 10 and s[4:5] == '-' and s[7:8] == '-':
-#             try:
-#                 return datetime.strptime(s, '%Y-%m-%d')
-#             except Exception:
-#                 pass
 
-#         # 'DD/MM/YYYY'
-#         if len(s) == 10 and s[2:3] == '/' and s[5:6] == '/':
-#             try:
-#                 return datetime.strptime(s, '%d/%m/%Y')
-#             except Exception:
-#                 pass
-
-#     return None
-
-# def timestamp() -> str:
-#     """Retorna el timestamp actual formateado"""
-#     return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-
-# def print_with_time(message: str) -> None:
-#     """Print con timestamp automático"""
-#     print(f"[{timestamp()}] {message}")
-
-# def get_token() -> str:
-#     """Obtiene el token de autenticación desde la variable de entorno"""
-#     load_dotenv()
+def run_finnegans_print_factura(browser, context, page, company: str, facturas: list[dict]) -> tuple[int, int, list[dict], list[dict]]:
+    fac_exitosos = 0
+    fac_fallidos = 0
+    fac_exitosos_lista = []
+    fac_fallidos_lista = []
     
-#     client_id = os.getenv('FINNEGANS_CLIENT_ID', '')
-#     client_secret = os.getenv('FINNEGANS_SECRET', '')
-#     url=f"https://api.teamplace.finneg.com/api/oauth/token?grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}"
+    select_company_action(page, company)
     
-#     if not client_id or not client_secret:
-#         util.print_with_time("Error: FINNEGANS_CLIENT_ID and FINNEGANS_SECRET must be set in .env file")
-#         exit(1)
+    # TODO: Ver de acceder al modulo de facturas en finnegans, ver login_finnegans.py
     
-#     response = requests.get(url)
-#     if response.status_code == 200:
-#         data = response.text
-#         return data
-#     else:
-#         util.print_with_time(f"Error al obtener el token: {response.status_code} - {response.text}")
-#         exit(1)
+    time.sleep(2)
+    if not navigate_to_section(page, "Facturas de Venta - Das Dach"):
+        raise Exception("Failed to navigate to Facturación section")
+    time.sleep(6)
+    frame = page.frames[1]
+    
+    for factura in facturas:
         
+        comprobante = factura['comprobante']
+        numero_factura = factura['numero_factura']
+        if numero_factura != 'A-0005-00006693':
+            continue
+        cuit = factura['cuit']
+        nro_cae = factura['nro_cae']
         
+        frame_search = wait_in_all_frames(page, "input.TOOLBARTooltipSearch")
+        filters = frame_search.locator("input.TOOLBARTooltipSearch")
+        filters.fill(numero_factura)
+        filters.press('Enter')
+        grid_body = frame_search.locator("div.webix_ss_body")
+        
+        cells = grid_body.locator("div.webix_cell")
+        
+            
+        print_with_time(f"Found {cells.count()} cells in the grid")
+        if cells.count() > 0:
+                
+            time.sleep(1)
+            
+           
+            try:
+                print_with_time(f"Processing factura {comprobante} for numero_factura {numero_factura} CUIT: {cuit} CAE: {nro_cae}")
+                # Aquí iría la lógica para imprimir o descargar la factura desde Finnegans
+                # Por ejemplo, navegar a la página correcta, buscar la factura, descargarla, etc.
+                # Simulamos éxito
+                
+                # Hace clic cobre la factura para abrirla
+                grid_body.locator('div.webix_column[column="3"] a').first.click()
+                
+                time.sleep(3)
+                
+                frame_factura = find_in_all_frames(page, '#_onMail')
+                
+                mail = frame_factura.locator('#_onMail')
+                mail.click()
+                
+                time.sleep(2)
+                
+                frame_mail = find_frame_with_plantillas(page)
+                
+                template = frame_mail.locator("a.TOOLBARBtnStandard.secondary.dropDown", has_text="Plantillas")
+                template.last.click()
+                frame_mail.locator('#listaPlantillas li.enabled').nth(2).click()
+                
+                
+                boton_enviar = frame_mail.locator("div.sendButton")
+                
+                fac_exitosos += 1
+                fac_exitosos_lista.append(f"{comprobante} - Factura {numero_factura}")
+                print_with_time(f"Factura {comprobante} processed successfully")
+       
+            
+            except Exception as e:
+                fac_fallidos += 1
+                fac_fallidos_lista.append({'comprobante': comprobante, 'error': str(e)})
+                print_with_time(f"Error processing factura {comprobante}: {e}")
+        else:
+            print_with_time(f"No cells found in the grid for factura {numero_factura}")
+        time.sleep(3)
+    return fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista
 
-
-#TODO: get_facturas_envio_pendiente
-# Debe acceder a la tabla facturas_generadas y retornar los atributos bajo la condicion que el atributo empresa sea igual 'Das Dash' y que el estado sea 'Generado' y el nro_cae no sea nulo
-
-    
 def process_company(company: str) -> None:
     inicio = datetime.now()
     print_with_time("Starting Finnegans login automation...")
@@ -123,7 +120,7 @@ def process_company(company: str) -> None:
     print_with_time("Remitos to be processed:")
     for factura in facturas_envio_pendiente:
         
-        print_with_time(f" - {factura['comprobante']} for client {factura['numero_factura']} CUIT: {factura['cuit']} CAE: {factura['nro_cae']}")
+        print_with_time(f" - {factura['comprobante']} for factura {factura['numero_factura']} CUIT: {factura['cuit']} CAE: {factura['nro_cae']}")
     
      # Solo proceder si hay remitos para procesar
     
@@ -135,7 +132,7 @@ def process_company(company: str) -> None:
                 print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
 
                 # Ejecutar diferentes módulos
-                remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista = run_finnegans_print_factura(browser, context, page, company, factura)
+                fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista = run_finnegans_print_factura(browser, context, page, company, facturas_envio_pendiente)
 
                 # Opcional: ejecutar otros módulos
                 # run_finnegans_reports(browser, context, page)

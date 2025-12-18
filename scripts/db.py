@@ -1,11 +1,12 @@
 import os
 import threading
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-
+from util import datetime, print_with_time
 import datetime
 
-from scripts.util import print_with_time, timestamp
+from util import print_with_time, timestamp
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': os.getenv('DB_PORT', '5432'),
@@ -61,9 +62,9 @@ def _ensure_facturas_table():
             cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_comprobante ON facturas_generadas(comprobante)")
             conn.commit()
             _FACT_TABLE_INITED = True
-            util.print_with_time("Tabla facturas_generadas creada/verificada")
+            print_with_time("Tabla facturas_generadas creada/verificada")
         except Exception as e:
-            util.print_with_time(f"Error creando/verificando tabla facturas_generadas: {e}")
+            print_with_time(f"Error creando/verificando tabla facturas_generadas: {e}")
         finally:
             if conn:
                 conn.close()
@@ -110,3 +111,32 @@ def guardar_factura_generada(
     finally:
         if conn:
             conn.close()
+
+
+def get_facturas_envio_pendiente() -> list[dict]:
+    conn = None
+    try:
+        conn = psycopg2.connect(**get_db_config())
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, fecha_hora, comprobante, cuit, empresa, provincia_destino,
+                       alicuota, numero_factura, nro_cae, estado, created_at
+                FROM facturas_generadas
+                WHERE empresa = %s
+                  AND estado = %s
+                  AND nro_cae IS NOT NULL
+                  AND nro_cae <> ''
+                """,
+                ('Das Dach', 'Generado'),
+            )
+            return cur.fetchall()
+    except Exception as e:
+        print_with_time(f"Error obteniendo facturas pendientes de envio: {e}")
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass

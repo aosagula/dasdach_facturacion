@@ -1,12 +1,12 @@
 
 import os
 import requests
+import time
 
 from util import print_with_time, timestamp, get_video_path, save_screenshot, install_hud
-import time
 from dotenv import load_dotenv
 from playwright.sync_api import Playwright
-
+import traceback
 
 def get_token() -> str:
     """Obtiene el token de autenticación desde la variable de entorno"""
@@ -107,12 +107,12 @@ def navigate_to_section(page, section_name: str) -> bool:
         print_with_time(f"Navigating to {section_name} section...")
         page.locator("#menu_button i").click()
         
-        page.get_by_role("button", name="Gestión Empresarial").click()
-        page.get_by_text("Ventas", exact=True).click()
+        page.get_by_role("button", name="Favoritos").click()
+        #page.get_by_text("Ventas", exact=True).click()
         
-        page.get_by_text(section_name).click()
+        page.get_by_text(section_name, exact=True).click()
         #new_page = new_page_info.value
-        time.sleep(1)
+        time.sleep(2)
         #page.wait_for_load_state('networkidle', timeout=10000)
         print_with_time(f"Navigated to {section_name} section")
         screenshot_bytes = page.screenshot()
@@ -124,6 +124,55 @@ def navigate_to_section(page, section_name: str) -> bool:
         print_with_time(f"Error navigating to {section_name}: {e}")
         return False
     
+def wait_in_all_frames(page, selector, timeout=15000):
+    """
+    Espera hasta que selector exista en algún frame.
+    Devuelve el frame en el que apareció.
+    """
+    import time
+    start = time.time()
+
+    while True:
+        for frame in page.frames:
+            try:
+                if frame.locator(selector).count() > 0:
+                    # si el objeto existe pero no es visible, esperar visibilidad
+                    try:
+                        frame.locator(selector).wait_for(state="visible", timeout=2000)
+                    except:
+                        pass
+                    return frame
+            except:
+                pass
+
+        if (time.time() - start) * 1000 > timeout:
+            raise TimeoutError(f"No apareció el selector '{selector}' en ningún frame.")
+        
+        time.sleep(0.1)
+    
+def find_frame_with_plantillas(page):
+    for frame in page.frames:
+        if frame.locator("a.TOOLBARBtnStandard.secondary.dropDown", has_text="Plantillas").count() > 0:
+            return frame
+    return None
+
+
+def find_in_all_frames(page, selector):
+    """
+    Busca un selector dentro de todos los frames de la page.
+    Retorna el frame donde el selector existe y es visible.
+    """
+    for frame in page.frames:
+        loc = frame.locator(selector)
+        try:
+            if loc.count() > 0 and loc.first.is_visible():
+                return frame
+        except Exception as e:
+            traceback.print_exc()
+            print_with_time(f"Error checking frame for selector {selector}: {e}")
+            pass
+    return None  # si no se encuentra
+
 def run_finnegans_login(playwright: Playwright) -> tuple:
     load_dotenv()
     
@@ -131,6 +180,7 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
     password = os.getenv('PASSWORD_FINNEGANS')
     workspace = os.getenv('WORKSPACE_FINNEGANS', '')
     webpage = os.getenv('WEBPAGE_FINNEGANS', 'https://services.finneg.com/login')
+    base_origin = 'https://core-web.finneg.com'
     
     if not username or not password:
         print_with_time("Error: USER_FINNEGANS and PASSWORD_FINNEGANS must be set in .env file")
@@ -150,8 +200,8 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
             "no_viewport": True,
             "user_agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
             "extra_http_headers": {
-                'Referer': 'https://core-web.finneg.com/',
-                'Origin': 'https://core-web.finneg.com',
+                'Referer': base_origin + '/',
+                'Origin': base_origin,
             }
 
         }
@@ -162,19 +212,25 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
             "no_viewport": True,
             "user_agent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
             "extra_http_headers": {
-                'Referer': 'https://core-web.finneg.com/',
-                'Origin': 'https://core-web.finneg.com',
+                'Referer': base_origin + '/',
+                'Origin': base_origin,
             }
 
         }
     
     # Configurar modo headless desde variable de entorno
     headless_mode = os.getenv('HEADLESS', 'true').lower() == 'true'
-    #TODO : configurar el browser Chromium, Firefox, Webkit desde variable de entorno
-    browser = playwright.chromium.launch(
-        headless=headless_mode,
-        args=['--start-maximized']
-    )
+    browser_name = os.getenv('PLAYWRIGHT_BROWSER', 'chromium').lower()
+    browser_type = {
+        'chromium': playwright.chromium,
+        'firefox': playwright.firefox,
+        'webkit': playwright.webkit,
+    }.get(browser_name, playwright.chromium)
+    
+    launch_options = {"headless": headless_mode}
+    if browser_type is playwright.chromium:
+        launch_options["args"] = ['--start-maximized']
+    browser = browser_type.launch(**launch_options)
     context = browser.new_context(**context_options)
     page = context.new_page()
     install_hud(context)

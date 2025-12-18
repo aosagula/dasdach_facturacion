@@ -10,7 +10,12 @@ import subprocess
 import psycopg2
 import asyncio
 import time
+import threading
+import requests
+import io
+import sys
 from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
 from file_manager import PHOTOS_DIR, VIDEOS_DIR, DATA_DIR, BASE_DIR, UPLOADS_DIR, create_directories
 from email_service import send_email_smtp
@@ -2245,3 +2250,443 @@ async def test_timeout(delay_minutes: float):
                 "delay_minutes": delay_minutes
             }
         )
+
+# ============= ENDPOINT ASÍNCRONO PARA FINNEGANS LOGIN =============
+
+class FinnegansRequest(BaseModel):
+    company: str
+    webhook_url: Optional[str] = None
+
+class FinnegansJobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    company: str
+    webhook_url: Optional[str]
+
+# Almacenamiento en memoria de trabajos (en producción usar Redis)
+jobs_storage = {}
+
+class LogCapture:
+    """Clase para capturar logs de stdout/stderr"""
+    def __init__(self):
+        self.logs = []
+        self.original_stdout = None
+        self.original_stderr = None
+
+    def start(self):
+        """Inicia la captura de logs"""
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        sys.stdout = self
+        sys.stderr = self
+
+    def stop(self):
+        """Detiene la captura de logs"""
+        if self.original_stdout:
+            sys.stdout = self.original_stdout
+        if self.original_stderr:
+            sys.stderr = self.original_stderr
+
+    def write(self, text):
+        """Captura el texto escrito"""
+        if text and text.strip():
+            self.logs.append({
+                'timestamp': datetime.now().isoformat(),
+                'message': text.strip()
+            })
+        # También escribir al stdout original para mantener logs en consola
+        if self.original_stdout:
+            self.original_stdout.write(text)
+
+    def flush(self):
+        """Método requerido para compatibilidad con stdout"""
+        if self.original_stdout:
+            self.original_stdout.flush()
+
+    def get_logs(self):
+        """Obtiene todos los logs capturados"""
+        return self.logs
+
+    def get_logs_text(self):
+        """Obtiene los logs como texto plano"""
+        return '\n'.join([log['message'] for log in self.logs])
+
+def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] = None):
+    """Ejecuta el proceso de facturación en background y notifica vía webhook"""
+
+    # Capturar logs
+    log_capture = LogCapture()
+    log_capture.start()
+
+    inicio = datetime.now()
+
+    try:
+        # Actualizar estado del job
+        jobs_storage[job_id] = {
+            'status': 'running',
+            'company': company,
+            'started_at': inicio.isoformat(),
+            'logs': []
+        }
+
+        print(f"[{job_id}] Iniciando proceso de facturación para {company}")
+
+        # Ejecutar el script de finnegans
+        env = os.environ.copy()
+        env['PLAYWRIGHT_BROWSERS_PATH'] = '/ms-playwright'
+
+        script_path = SCRIPTS_DIR / "finnegans_login.py"
+
+        result = subprocess.run(
+            ["python", str(script_path), "--company", company],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=1800  # 30 minutos timeout
+        )
+
+        # Detener captura de logs
+        log_capture.stop()
+
+        fin = datetime.now()
+        duracion = (fin - inicio).total_seconds()
+
+        # Determinar si fue exitoso
+        success = result.returncode == 0
+
+        # Parsear el output para extraer estadísticas
+        log_completo = result.stdout + "\n" + result.stderr
+
+        # Buscar el resumen en el log
+        resumen = {
+            'total_remitos': 0,
+            'exitosos': 0,
+            'fallidos': 0,
+            'no_procesados': 0
+        }
+
+        for line in log_completo.split('\n'):
+            if 'Total de remitos encontrados:' in line:
+                try:
+                    resumen['total_remitos'] = int(line.split(':')[-1].strip())
+                except:
+                    pass
+            elif 'Remitos procesados exitosamente:' in line:
+                try:
+                    resumen['exitosos'] = int(line.split(':')[-1].strip())
+                except:
+                    pass
+            elif 'Remitos con errores:' in line:
+                try:
+                    resumen['fallidos'] = int(line.split(':')[-1].strip())
+                except:
+                    pass
+            elif 'Remitos no procesados:' in line:
+                try:
+                    resumen['no_procesados'] = int(line.split(':')[-1].strip())
+                except:
+                    pass
+
+        # Actualizar job con resultado
+        jobs_storage[job_id] = {
+            'status': 'completed' if success else 'failed',
+            'company': company,
+            'started_at': inicio.isoformat(),
+            'finished_at': fin.isoformat(),
+            'duration_seconds': duracion,
+            'success': success,
+            'returncode': result.returncode,
+            'resumen': resumen,
+            'logs': log_capture.get_logs(),
+            'log_completo': log_completo
+        }
+
+        # Notificar vía webhook si se proporcionó
+        if webhook_url:
+            try:
+                webhook_payload = {
+                    'job_id': job_id,
+                    'status': 'completed' if success else 'failed',
+                    'company': company,
+                    'started_at': inicio.isoformat(),
+                    'finished_at': fin.isoformat(),
+                    'duration_seconds': duracion,
+                    'success': success,
+                    'resumen': resumen,
+                    'logs': log_capture.get_logs(),
+                    'log_completo': log_completo
+                }
+
+                print(f"[{job_id}] Enviando notificación a webhook: {webhook_url}")
+
+                response = requests.post(
+                    webhook_url,
+                    json=webhook_payload,
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    print(f"[{job_id}] Webhook notificado exitosamente")
+                    jobs_storage[job_id]['webhook_notified'] = True
+                else:
+                    print(f"[{job_id}] Error al notificar webhook: {response.status_code}")
+                    jobs_storage[job_id]['webhook_error'] = f"HTTP {response.status_code}"
+
+            except Exception as e:
+                print(f"[{job_id}] Error enviando webhook: {str(e)}")
+                jobs_storage[job_id]['webhook_error'] = str(e)
+
+        print(f"[{job_id}] Proceso finalizado. Status: {'exitoso' if success else 'fallido'}")
+
+    except subprocess.TimeoutExpired:
+        log_capture.stop()
+        fin = datetime.now()
+        duracion = (fin - inicio).total_seconds()
+
+        jobs_storage[job_id] = {
+            'status': 'timeout',
+            'company': company,
+            'started_at': inicio.isoformat(),
+            'finished_at': fin.isoformat(),
+            'duration_seconds': duracion,
+            'error': 'Proceso excedió el tiempo límite de 30 minutos',
+            'logs': log_capture.get_logs()
+        }
+
+        # Notificar timeout vía webhook
+        if webhook_url:
+            try:
+                requests.post(
+                    webhook_url,
+                    json=jobs_storage[job_id],
+                    timeout=30
+                )
+            except:
+                pass
+
+    except Exception as e:
+        log_capture.stop()
+        fin = datetime.now()
+        duracion = (fin - inicio).total_seconds()
+
+        jobs_storage[job_id] = {
+            'status': 'error',
+            'company': company,
+            'started_at': inicio.isoformat(),
+            'finished_at': fin.isoformat(),
+            'duration_seconds': duracion,
+            'error': str(e),
+            'logs': log_capture.get_logs()
+        }
+
+        # Notificar error vía webhook
+        if webhook_url:
+            try:
+                requests.post(
+                    webhook_url,
+                    json=jobs_storage[job_id],
+                    timeout=30
+                )
+            except:
+                pass
+
+@app.post("/finnegans/start",
+    summary="Iniciar proceso de facturación Finnegans (async)",
+    description="Inicia el proceso de facturación de forma asíncrona. Retorna inmediatamente un job_id y notifica vía webhook cuando finaliza.",
+    response_model=FinnegansJobResponse,
+    responses={
+        200: {
+            "description": "Proceso iniciado exitosamente",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "finn_20250117_123456_abc123",
+                        "status": "started",
+                        "message": "Proceso iniciado en background",
+                        "company": "Das Dach",
+                        "webhook_url": "https://n8n.tudominio.com/webhook/finnegans-result"
+                    }
+                }
+            }
+        }
+    })
+async def start_finnegans_process(
+    request: FinnegansRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Inicia el proceso de facturación de Finnegans de forma asíncrona.
+
+    **Parámetros:**
+    - **company**: Nombre de la empresa a procesar (ej: "Das Dach", "AVIANCA")
+    - **webhook_url** (opcional): URL de webhook para recibir notificación cuando finalice
+
+    **Funcionamiento:**
+    1. El endpoint retorna inmediatamente con un `job_id`
+    2. El proceso se ejecuta en background
+    3. Cuando finaliza (exitoso o con error), envía los resultados al `webhook_url`
+
+    **Payload del webhook:**
+    ```json
+    {
+        "job_id": "finn_20250117_123456_abc123",
+        "status": "completed",
+        "company": "Das Dach",
+        "started_at": "2025-01-17T12:34:56",
+        "finished_at": "2025-01-17T12:45:23",
+        "duration_seconds": 627.5,
+        "success": true,
+        "resumen": {
+            "total_remitos": 15,
+            "exitosos": 14,
+            "fallidos": 1,
+            "no_procesados": 0
+        },
+        "logs": [...],
+        "log_completo": "..."
+    }
+    ```
+
+    **Ejemplo de uso desde n8n:**
+
+    Nodo 1 - HTTP Request (Iniciar proceso):
+    - Method: POST
+    - URL: https://tu-servidor.com/finnegans/start
+    - Body (JSON):
+      ```json
+      {
+          "company": "Das Dach",
+          "webhook_url": "{{$node["Webhook"].json["webhook_url"]}}"
+      }
+      ```
+
+    Nodo 2 - Webhook (Recibir resultado):
+    - Webhook URL: capturar y pasar al nodo anterior
+    - Este webhook recibirá el resultado cuando finalice el proceso
+    """
+
+    # Generar job_id único
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    import uuid
+    job_id = f"finn_{timestamp}_{str(uuid.uuid4())[:8]}"
+
+    # Validar company
+    if not request.company:
+        raise HTTPException(status_code=400, detail="Company es requerido")
+
+    # Iniciar proceso en background usando threading
+    # (BackgroundTasks no funciona bien para procesos muy largos)
+    thread = threading.Thread(
+        target=run_finnegans_process,
+        args=(job_id, request.company, request.webhook_url),
+        daemon=True
+    )
+    thread.start()
+
+    return FinnegansJobResponse(
+        job_id=job_id,
+        status="started",
+        message="Proceso iniciado en background. Recibirás notificación en el webhook cuando finalice.",
+        company=request.company,
+        webhook_url=request.webhook_url
+    )
+
+@app.get("/finnegans/status/{job_id}",
+    summary="Consultar estado de un job de facturación",
+    description="Obtiene el estado actual y logs de un proceso de facturación",
+    responses={
+        200: {
+            "description": "Estado del job obtenido exitosamente",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "running": {
+                            "summary": "Proceso en ejecución",
+                            "value": {
+                                "job_id": "finn_20250117_123456_abc123",
+                                "status": "running",
+                                "company": "Das Dach",
+                                "started_at": "2025-01-17T12:34:56",
+                                "logs": []
+                            }
+                        },
+                        "completed": {
+                            "summary": "Proceso completado",
+                            "value": {
+                                "job_id": "finn_20250117_123456_abc123",
+                                "status": "completed",
+                                "company": "Das Dach",
+                                "started_at": "2025-01-17T12:34:56",
+                                "finished_at": "2025-01-17T12:45:23",
+                                "duration_seconds": 627.5,
+                                "success": True,
+                                "resumen": {
+                                    "total_remitos": 15,
+                                    "exitosos": 14,
+                                    "fallidos": 1,
+                                    "no_procesados": 0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Job no encontrado"
+        }
+    })
+async def get_finnegans_job_status(job_id: str):
+    """
+    Consulta el estado de un proceso de facturación.
+
+    **Parámetros:**
+    - **job_id**: ID del job retornado al iniciar el proceso
+
+    **Estados posibles:**
+    - `running`: Proceso en ejecución
+    - `completed`: Proceso finalizado exitosamente
+    - `failed`: Proceso finalizado con errores
+    - `timeout`: Proceso excedió el tiempo límite
+    - `error`: Error inesperado durante la ejecución
+
+    Útil para hacer polling desde n8n si no se quiere usar webhook.
+    """
+
+    if job_id not in jobs_storage:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+
+    job_data = jobs_storage[job_id]
+    job_data['job_id'] = job_id
+
+    return job_data
+
+@app.get("/finnegans/jobs",
+    summary="Listar todos los jobs de facturación",
+    description="Obtiene la lista de todos los jobs ejecutados")
+async def list_finnegans_jobs():
+    """
+    Lista todos los jobs de facturación ejecutados.
+
+    Útil para debugging y monitoreo.
+    """
+
+    jobs_list = []
+    for job_id, job_data in jobs_storage.items():
+        jobs_list.append({
+            'job_id': job_id,
+            'status': job_data.get('status'),
+            'company': job_data.get('company'),
+            'started_at': job_data.get('started_at'),
+            'finished_at': job_data.get('finished_at'),
+            'success': job_data.get('success')
+        })
+
+    # Ordenar por fecha de inicio descendente
+    jobs_list.sort(key=lambda x: x.get('started_at', ''), reverse=True)
+
+    return {
+        'total': len(jobs_list),
+        'jobs': jobs_list
+    }
