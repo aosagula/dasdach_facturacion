@@ -2330,7 +2330,7 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
             'logs': []
         }
 
-        print(f"[{job_id}] Iniciando proceso de facturación para {company}")
+        print(f"[{job_id}] Iniciando proceso de facturación para {company} webhook: {webhook_url}")
 
         # Ejecutar el script de finnegans
         env = os.environ.copy()
