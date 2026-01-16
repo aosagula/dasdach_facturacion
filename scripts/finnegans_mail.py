@@ -24,8 +24,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def run_finnegans_print_factura(browser, context, page, company: str, facturas: list[dict]) -> tuple[int, int, list[dict], list[dict]]:
     fac_exitosos = 0
     fac_fallidos = 0
+    fac_no_procesados = 0
     fac_exitosos_lista = []
     fac_fallidos_lista = []
+    fac_no_procesados_lista = []  
+    
+    
+    
+    
     
     select_company_action(page, company)
     
@@ -41,7 +47,7 @@ def run_finnegans_print_factura(browser, context, page, company: str, facturas: 
         
         comprobante = factura['comprobante']
         numero_factura = factura['numero_factura']
-        if numero_factura != 'A-0005-00006693':
+        if numero_factura != 'A-0005-00006897':
             continue
         cuit = factura['cuit']
         nro_cae = factura['nro_cae']
@@ -75,24 +81,34 @@ def run_finnegans_print_factura(browser, context, page, company: str, facturas: 
                 frame_factura = find_in_all_frames(page, '#_onMail')
                 
                 mail = frame_factura.locator('#_onMail')
-                mail.click()
+                count_mail = frame_factura.locator('#count_onMail')
+                count_mail_text = count_mail.inner_text()
+                count_mail_text = count_mail_text.strip() if count_mail_text else ""
+                count_mail_value = int(count_mail_text) if count_mail_text else 0
                 
-                time.sleep(2)
+                if count_mail_value == 0:
+                    mail.click()
                 
-                frame_mail = find_frame_with_plantillas(page)
-                
-                template = frame_mail.locator("a.TOOLBARBtnStandard.secondary.dropDown", has_text="Plantillas")
-                template.last.click()
-                frame_mail.locator('#listaPlantillas li.enabled').nth(2).click()
+                    time.sleep(2)
                 
                 
-                boton_enviar = frame_mail.locator("div.sendButton")
                 
-                fac_exitosos += 1
-                fac_exitosos_lista.append(f"{comprobante} - Factura {numero_factura}")
-                print_with_time(f"Factura {comprobante} processed successfully")
-       
-            
+                    frame_mail = find_frame_with_plantillas(page)
+                    # NO SE REQUIERAN PLANTILLAS
+                    # template = frame_mail.locator("a.TOOLBARBtnStandard.secondary.dropDown", has_text="Plantillas")
+                    # template.last.click()
+                    # frame_mail.locator('#listaPlantillas li.enabled').nth(2).click()
+                                
+                    boton_enviar = frame_mail.locator("div.sendButton")
+                    #boton_enviar.click()
+                    fac_exitosos += 1
+                    fac_exitosos_lista.append(f"{comprobante} - Factura {numero_factura}")
+                    print_with_time(f"Factura {comprobante} processed successfully")
+                else:
+                    print_with_time(f"Factura {comprobante} not processed, mail count: {count_mail_value}")
+                    fac_no_procesados += 1
+                    fac_no_procesados_lista.append({'comprobante': comprobante, 'razon': f"Mail count is {count_mail_value}, Mail ya enviado"})
+
             except Exception as e:
                 fac_fallidos += 1
                 fac_fallidos_lista.append({'comprobante': comprobante, 'error': str(e)})
@@ -100,7 +116,7 @@ def run_finnegans_print_factura(browser, context, page, company: str, facturas: 
         else:
             print_with_time(f"No cells found in the grid for factura {numero_factura}")
         time.sleep(3)
-    return fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista
+    return fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista, fac_no_procesados, fac_no_procesados_lista
 
 def process_company(company: str) -> None:
     inicio = datetime.now()
@@ -111,12 +127,12 @@ def process_company(company: str) -> None:
     facturas_envio_pendiente = get_facturas_envio_pendiente()
     print_with_time(f"Found {len(facturas_envio_pendiente)} unique remitos to process")
 
-    remitos_exitosos = 0
-    remitos_fallidos = 0
-    remitos_no_procesados = 0
-    remitos_exitosos_lista = []
-    remitos_fallidos_lista = []
-    remitos_no_procesados_lista = []            
+    fac_exitosos = 0
+    fac_fallidos = 0
+    fac_no_procesados = 0
+    fac_exitosos_lista = []
+    fac_fallidos_lista = []
+    fac_no_procesados_lista = []            
     print_with_time("Remitos to be processed:")
     for factura in facturas_envio_pendiente:
         
@@ -132,7 +148,7 @@ def process_company(company: str) -> None:
                 print_with_time(f"=== POST-LOGIN URL: {page.url} ===")
 
                 # Ejecutar diferentes módulos
-                fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista = run_finnegans_print_factura(browser, context, page, company, facturas_envio_pendiente)
+                fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista, fac_no_procesados, fac_no_procesados_lista = run_finnegans_print_factura(browser, context, page, company, facturas_envio_pendiente)
 
                 # Opcional: ejecutar otros módulos
                 # run_finnegans_reports(browser, context, page)
@@ -149,7 +165,7 @@ def process_company(company: str) -> None:
 
     fin = datetime.now()
     tiempo_transcurrido = fin - inicio
-    #print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista, resumen, inicio, fin, fin - inicio)
+    print_summary(fac_exitosos, fac_fallidos, fac_exitosos_lista, fac_fallidos_lista, fac_no_procesados, fac_no_procesados_lista, facturas_envio_pendiente, inicio, fin, fin - inicio)
 
 def print_summary(remitos_exitosos, remitos_fallidos, remitos_exitosos_lista, remitos_fallidos_lista, remitos_no_procesados, remitos_no_procesados_lista, resumen, inicio, fin, tiempo_transcurrido):
     print_with_time("=" * 50)

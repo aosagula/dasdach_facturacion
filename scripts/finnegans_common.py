@@ -239,7 +239,7 @@ def run_finnegans_login(playwright: Playwright) -> tuple:
         page.goto(webpage)
         
         print_with_time("Waiting for page to load...")
-        page.wait_for_load_state('networkidle')
+        #page.wait_for_load_state('networkidle')
     
     
     
