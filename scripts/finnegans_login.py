@@ -264,6 +264,7 @@ def get_db_config() -> dict:
 _FACT_TABLE_INITED = False
 _FACT_LOCK = threading.Lock()
 
+
 def _ensure_facturas_table():
     global _FACT_TABLE_INITED
     if _FACT_TABLE_INITED:
@@ -281,6 +282,7 @@ def _ensure_facturas_table():
                     id SERIAL PRIMARY KEY,
                     fecha_hora TIMESTAMP NOT NULL,
                     comprobante VARCHAR(100) NOT NULL,
+                    docnroint VARCHAR(100),
                     cuit VARCHAR(20),
                     empresa VARCHAR(200),
                     provincia_destino VARCHAR(100),
@@ -293,6 +295,7 @@ def _ensure_facturas_table():
                 """
             )
             # Ensure column exists for existing installations
+            cur.execute("ALTER TABLE facturas_generadas ADD COLUMN IF NOT EXISTS docnroint VARCHAR(100)")
             cur.execute("ALTER TABLE facturas_generadas ADD COLUMN IF NOT EXISTS nro_cae VARCHAR(100)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_estado ON facturas_generadas(estado)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_facturas_comprobante ON facturas_generadas(comprobante)")
@@ -308,6 +311,7 @@ def _ensure_facturas_table():
 def guardar_factura_generada(
     fecha_hora: datetime,
     comprobante: str,
+    docnroint: str | None,
     cuit: str | None,
     empresa: str | None,
     provincia_destino: str | None,
@@ -325,12 +329,13 @@ def guardar_factura_generada(
         cur.execute(
             """
             INSERT INTO facturas_generadas
-            (fecha_hora, comprobante, cuit, empresa, provincia_destino, alicuota, numero_factura, nro_cae, estado)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (fecha_hora, comprobante, docnroint, cuit, empresa, provincia_destino, alicuota, numero_factura, nro_cae, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 fecha_hora,
                 comprobante,
+                docnroint,
                 cuit,
                 empresa,
                 provincia_destino,
@@ -663,6 +668,7 @@ def search_and_make_invoice_avianca(page, frame, remito, company) -> None:
             guardar_factura_generada(
                 datetime.now(),
                 remito.get('comprobante'),
+                remito.get('docnroint'),
                 cuit,
                 company,
                 provincia,
@@ -852,6 +858,7 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                     guardar_factura_generada(
                         datetime.now(),
                         remito.get('comprobante'),
+                        remito.get('docnroint'),
                         cuit,
                         company,
                         provincia,
