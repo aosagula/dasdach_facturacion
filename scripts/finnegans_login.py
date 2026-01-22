@@ -849,6 +849,18 @@ def search_and_make_invoice_dasdach(page, frame, remito, company) -> None:
                     
                 if nro_cae is None or nro_cae == '':
                     print_with_time("No se obtuvo CAE, la factura no fue generada correctamente")
+                    guardar_factura_generada(
+                        datetime.now(),
+                        remito.get('comprobante'),
+                        remito.get('docnroint'),
+                        cuit,
+                        company,
+                        provincia,
+                        float(alicuotas_a_cobrar) if 'alicuotas_a_cobrar' in locals() else None,
+                        nro_factura,
+                        nro_cae,
+                        'Error CAE'
+                    )
                     raise FacturacionAbortada("No se obtuvo CAE, la factura no fue generada correctamente")
                 
                 # Registrar en PostgreSQL con estado Generado (después del guardado real)
