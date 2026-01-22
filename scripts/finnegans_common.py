@@ -156,7 +156,15 @@ def find_frame_with_plantillas(page):
             return frame
     return None
 
-
+#TODO: Modificar para buscar el frame con el div overDivPrint 
+def find_frame_with_printer(page):
+    for frame in page.frames:
+        try:
+            if frame.query_selector("div.overDivPrint") is not None:
+                return frame
+        except Exception:
+            pass
+    return None
 def find_in_all_frames(page, selector):
     """
     Busca un selector dentro de todos los frames de la page.

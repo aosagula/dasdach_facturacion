@@ -121,7 +121,7 @@ def get_facturas_envio_pendiente() -> list[dict]:
             cur.execute(
                 """
                 SELECT id, fecha_hora, comprobante, cuit, empresa, provincia_destino,
-                       alicuota, numero_factura, nro_cae, estado, created_at
+                       alicuota, numero_factura, nro_cae, estado, created_at, docnroint
                 FROM facturas_generadas
                 WHERE empresa = %s
                   AND estado = %s
@@ -134,6 +134,44 @@ def get_facturas_envio_pendiente() -> list[dict]:
     except Exception as e:
         print_with_time(f"Error obteniendo facturas pendientes de envio: {e}")
         return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def update_factura_estado(factura_id: int | None, comprobante: str | None, estado: str = 'Enviado') -> None:
+    _ensure_facturas_table()
+    conn = None
+    try:
+        conn = psycopg2.connect(**get_db_config())
+        with conn.cursor() as cur:
+            if factura_id is not None:
+                cur.execute(
+                    """
+                    UPDATE facturas_generadas
+                    SET estado = %s
+                    WHERE id = %s
+                    """,
+                    (estado, factura_id),
+                )
+            elif comprobante:
+                cur.execute(
+                    """
+                    UPDATE facturas_generadas
+                    SET estado = %s
+                    WHERE comprobante = %s
+                    """,
+                    (estado, comprobante),
+                )
+            else:
+                return
+        conn.commit()
+        print_with_time(f"Factura actualizada a estado {estado}")
+    except Exception as e:
+        print_with_time(f"Error actualizando estado de factura: {e}")
     finally:
         if conn:
             try:
