@@ -2256,6 +2256,7 @@ async def test_timeout(delay_minutes: float):
 class FinnegansRequest(BaseModel):
     company: str
     webhook_url: Optional[str] = None
+    script: Optional[str] = "finnegans_login.py"  # Script a ejecutar: finnegans_login.py o finnegans_mail.py
 
 class FinnegansJobResponse(BaseModel):
     job_id: str
@@ -2312,7 +2313,7 @@ class LogCapture:
         """Obtiene los logs como texto plano"""
         return '\n'.join([log['message'] for log in self.logs])
 
-def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] = None):
+def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] = None, script: str = "finnegans_login.py"):
     """Ejecuta el proceso de facturación en background y notifica vía webhook"""
 
     # Capturar logs
@@ -2326,17 +2327,18 @@ def run_finnegans_process(job_id: str, company: str, webhook_url: Optional[str] 
         jobs_storage[job_id] = {
             'status': 'running',
             'company': company,
+            'script': script,
             'started_at': inicio.isoformat(),
             'logs': []
         }
 
-        print(f"[{job_id}] Iniciando proceso de facturación para {company} webhook: {webhook_url}")
+        print(f"[{job_id}] Iniciando proceso para {company} con script {script} webhook: {webhook_url}")
 
         # Ejecutar el script de finnegans
         env = os.environ.copy()
         env['PLAYWRIGHT_BROWSERS_PATH'] = '/ms-playwright'
 
-        script_path = SCRIPTS_DIR / "finnegans_login.py"
+        script_path = SCRIPTS_DIR / script
 
         result = subprocess.run(
             ["python", str(script_path), "--company", company],
@@ -2604,11 +2606,16 @@ async def start_finnegans_process(
     if not request.company:
         raise HTTPException(status_code=400, detail="Company es requerido")
 
+    # Validar script (solo permitir scripts conocidos por seguridad)
+    allowed_scripts = ["finnegans_login.py", "finnegans_mail.py"]
+    if request.script not in allowed_scripts:
+        raise HTTPException(status_code=400, detail=f"Script no permitido. Scripts válidos: {allowed_scripts}")
+
     # Iniciar proceso en background usando threading
     # (BackgroundTasks no funciona bien para procesos muy largos)
     thread = threading.Thread(
         target=run_finnegans_process,
-        args=(job_id, request.company, request.webhook_url),
+        args=(job_id, request.company, request.webhook_url, request.script),
         daemon=True
     )
     thread.start()
